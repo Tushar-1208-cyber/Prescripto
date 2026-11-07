@@ -1,5 +1,6 @@
 import express from 'express';
 import {
+    registerDoctor,
     loginDoctor,
     appointmentsDoctor,
     appointmentCancel,
@@ -13,9 +14,11 @@ import {
     addPrescription
 } from '../controllers/doctorController.js';
 import authDoctor from '../middleware/authDoctor.js';
+import upload from '../middleware/multer.js';
 import { loginLimiter } from '../middleware/rateLimiter.js';
 const doctorRouter = express.Router();
 
+doctorRouter.post("/register", loginLimiter, upload.single('image'), registerDoctor)
 doctorRouter.post("/login", loginLimiter, loginDoctor)
 doctorRouter.get("/reviews/:docId", getDoctorReviews)
 doctorRouter.post("/cancel-appointment", authDoctor, appointmentCancel)
