@@ -206,6 +206,43 @@ const getDoctorReviews = async (req, res) => {
     }
 }
 
+// API to add or update digital prescription for an appointment
+const addPrescription = async (req, res) => {
+    try {
+        const { docId, appointmentId, diagnosis, notes, medicines } = req.body
+
+        if (!appointmentId) {
+            return res.status(400).json({ success: false, message: 'Appointment ID is required' })
+        }
+
+        const appointment = await appointmentModel.findById(appointmentId)
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: 'Appointment not found' })
+        }
+
+        if (appointment.docId.toString() !== docId.toString()) {
+            return res.status(403).json({ success: false, message: 'Unauthorized action' })
+        }
+
+        const prescriptionData = {
+            diagnosis: diagnosis || '',
+            notes: notes || '',
+            medicines: medicines || [],
+            dateIssued: Date.now()
+        }
+
+        await appointmentModel.findByIdAndUpdate(appointmentId, {
+            prescription: prescriptionData,
+            isCompleted: true
+        })
+
+        res.json({ success: true, message: 'Prescription saved successfully' })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
 export {
     loginDoctor,
     appointmentsDoctor,
@@ -216,5 +253,6 @@ export {
     doctorDashboard,
     doctorProfile,
     updateDoctorProfile,
-    getDoctorReviews
+    getDoctorReviews,
+    addPrescription
 }
