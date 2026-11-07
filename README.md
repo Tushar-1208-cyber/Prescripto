@@ -7,6 +7,7 @@ Prescripto is a full-stack MERN healthcare application that enables patients to 
 - **Forgot Password Flow**: Secure 6-digit OTP email verification for password resets.
 - **Doctor Portal**: Dedicated dashboard with earnings analytics, unique patient tracking, availability toggle, custom working hours, and digital prescription writer (medicines, dosage, notes).
 - **Admin Dashboard**: Analytics, doctor onboarding & deletion, user moderation (block/unblock), global appointment controls, and 1-click visit reminders dispatch.
+- **Real-Time Live Chat**: Instant patient-doctor consultation chat powered by Socket.io with persistent MongoDB message history.
 - **Dual Payment & Automatic Refunds**: Razorpay & Stripe integration with server-side signature/session validation and automated refund tracking on cancellation.
 - **Automated Email Notifications**: Booking confirmation, cancellation, reminder, and OTP emails powered by Nodemailer.
 - **DevOps & Tooling**: Docker Compose setup for all services, GitHub Actions CI automated pipeline, and OpenAPI/Swagger specification.
