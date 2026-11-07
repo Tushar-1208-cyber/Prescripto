@@ -189,6 +189,49 @@ const sendReminders = async (_req, res) => {
     }
 }
 
+// API to get all registered patients for admin
+const allUsers = async (_req, res) => {
+    try {
+        const users = await userModel.find({}).select('-password')
+        res.json({ success: true, users })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
+// API to toggle block status of a user
+const toggleBlockUser = async (req, res) => {
+    try {
+        const { userId } = req.body
+        const user = await userModel.findById(userId)
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' })
+        }
+        await userModel.findByIdAndUpdate(userId, { isBlocked: !user.isBlocked })
+        res.json({ success: true, message: user.isBlocked ? 'User unblocked successfully' : 'User blocked successfully' })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
+// API to delete a doctor
+const deleteDoctor = async (req, res) => {
+    try {
+        const { docId } = req.body
+        const doctor = await doctorModel.findById(docId)
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: 'Doctor not found' })
+        }
+        await doctorModel.findByIdAndDelete(docId)
+        res.json({ success: true, message: 'Doctor deleted successfully' })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
 export {
     loginAdmin,
     appointmentsAdmin,
@@ -196,5 +239,8 @@ export {
     addDoctor,
     allDoctors,
     adminDashboard,
-    sendReminders
+    sendReminders,
+    allUsers,
+    toggleBlockUser,
+    deleteDoctor
 }
