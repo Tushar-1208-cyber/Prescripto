@@ -3,12 +3,13 @@
 Prescripto is a full-stack MERN healthcare application that enables patients to search specialists, book consultation slots in real-time, and make secure online payments. It features a three-tier portal architecture: Patient Client, Doctor Workspace, and Super Admin Management.
 
 ## Key Features 
-- **Patient Portal**: Register, filter doctors by speciality, book appointments with real-time double-booking prevention, pay via Razorpay/Stripe, review doctors, and manage bookings.
-- **Doctor Portal**: Dedicated dashboard with earnings analytics, unique patient tracking, appointment status updates (Complete/Cancel), and live availability toggling.
-- **Admin Dashboard**: Comprehensive analytics, new doctor onboarding with Cloudinary photo uploads, and platform-wide appointment controls.
-- **Dual Payment Integration**: Secure payments through Razorpay (UPI, NetBanking, Cards) and Stripe with server-side validation.
-- **Automated Email Notifications**: Booking confirmation and cancellation email alerts powered by Nodemailer.
-- **Production-Ready Security**: JWT authentication, bcrypt password hashing, express-rate-limit protection against brute-force logins, and Helmet HTTP security headers.
+- **Patient Portal**: Search doctors by name/fees/rating, filter by speciality, book appointments with real-time double-booking locks, reschedule bookings, make payments (Razorpay/Stripe), view & print digital prescriptions (Rx), and review doctors.
+- **Forgot Password Flow**: Secure 6-digit OTP email verification for password resets.
+- **Doctor Portal**: Dedicated dashboard with earnings analytics, unique patient tracking, availability toggle, custom working hours, and digital prescription writer (medicines, dosage, notes).
+- **Admin Dashboard**: Analytics, doctor onboarding & deletion, user moderation (block/unblock), global appointment controls, and 1-click visit reminders dispatch.
+- **Dual Payment & Automatic Refunds**: Razorpay & Stripe integration with server-side signature/session validation and automated refund tracking on cancellation.
+- **Automated Email Notifications**: Booking confirmation, cancellation, reminder, and OTP emails powered by Nodemailer.
+- **DevOps & Tooling**: Docker Compose setup for all services, GitHub Actions CI automated pipeline, and OpenAPI/Swagger specification.
  
 ## Tech Stack  
 - **Frontend & Admin**: React 18, Vite, Tailwind CSS, React Router v6, Axios, React Toastify
