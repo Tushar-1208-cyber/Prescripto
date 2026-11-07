@@ -20,6 +20,7 @@ const MyAppointments = () => {
     const [reschedulingId, setReschedulingId] = useState('')
     const [rescheduleDate, setRescheduleDate] = useState('')
     const [rescheduleTime, setRescheduleTime] = useState('10:00 AM')
+    const [selectedPrescription, setSelectedPrescription] = useState(null)
 
     const timeSlots = ["10:00 AM", "11:00 AM", "12:00 PM", "02:00 PM", "03:00 PM", "04:00 PM", "05:00 PM", "06:00 PM", "07:00 PM"]
 
@@ -204,6 +205,11 @@ const MyAppointments = () => {
                             {!item.cancelled && item.payment && !item.isCompleted && <button className='sm:min-w-48 py-2 border rounded text-[#696969]  bg-[#EAEFFF]'>Paid</button>}
 
                             {item.isCompleted && <button className='sm:min-w-48 py-2 border border-green-500 rounded text-green-500'>Completed</button>}
+                            {item.isCompleted && item.prescription?.diagnosis && (
+                                <button onClick={() => setSelectedPrescription(item)} className='sm:min-w-48 py-2 border border-indigo-500 rounded text-indigo-600 bg-indigo-50 hover:bg-indigo-600 hover:text-white transition-all'>
+                                    View Prescription (Rx)
+                                </button>
+                            )}
                             {item.isCompleted && reviewingId !== item._id && <button onClick={() => setReviewingId(item._id)} className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-primary hover:text-white transition-all duration-300'>Rate Doctor</button>}
 
                             {!item.cancelled && !item.isCompleted && (
@@ -276,6 +282,72 @@ const MyAppointments = () => {
                     </div>
                 ))}
             </div>
+            {/* Prescription View & Print Modal */}
+            {selectedPrescription && (
+                <div className='fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 print:p-0'>
+                    <div className='bg-white rounded-xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto p-6 border'>
+                        <div className='flex justify-between items-start pb-4 border-b'>
+                            <div>
+                                <h2 className='text-xl font-bold text-primary'>Prescripto Healthcare</h2>
+                                <p className='text-xs text-gray-500'>Digital Medical Consultation Record</p>
+                            </div>
+                            <button onClick={() => setSelectedPrescription(null)} className='text-gray-400 hover:text-gray-600 text-2xl font-bold print:hidden'>&times;</button>
+                        </div>
+
+                        <div className='grid grid-cols-2 gap-4 py-4 border-b text-xs text-gray-600'>
+                            <div>
+                                <p className='font-bold text-sm text-gray-800'>Dr. {selectedPrescription.docData?.name}</p>
+                                <p>{selectedPrescription.docData?.speciality} ({selectedPrescription.docData?.degree})</p>
+                                <p>{selectedPrescription.docData?.address?.line1}, {selectedPrescription.docData?.address?.line2}</p>
+                            </div>
+                            <div className='text-right'>
+                                <p><span className='font-semibold text-gray-700'>Patient:</span> {selectedPrescription.userData?.name}</p>
+                                <p><span className='font-semibold text-gray-700'>Date:</span> {slotDateFormat(selectedPrescription.slotDate)}</p>
+                                <p><span className='font-semibold text-gray-700'>Time:</span> {selectedPrescription.slotTime}</p>
+                            </div>
+                        </div>
+
+                        <div className='py-3 text-sm'>
+                            <p className='text-xs font-semibold text-gray-500 uppercase'>Diagnosis:</p>
+                            <p className='font-medium text-gray-800 mt-0.5'>{selectedPrescription.prescription?.diagnosis || 'General Consultation'}</p>
+                        </div>
+
+                        {selectedPrescription.prescription?.medicines?.length > 0 && (
+                            <div className='py-3'>
+                                <p className='text-xs font-semibold text-gray-500 uppercase mb-2'>Rx - Prescribed Medicines:</p>
+                                <div className='border rounded overflow-hidden text-xs'>
+                                    <div className='grid grid-cols-3 bg-gray-100 font-semibold p-2 text-gray-700'>
+                                        <p>Medicine Name</p>
+                                        <p>Dosage</p>
+                                        <p>Frequency</p>
+                                    </div>
+                                    {selectedPrescription.prescription.medicines.map((med, idx) => (
+                                        <div key={idx} className='grid grid-cols-3 p-2 border-t text-gray-600'>
+                                            <p className='font-medium text-gray-800'>{med.name}</p>
+                                            <p>{med.dosage || '-'}</p>
+                                            <p>{med.frequency || '-'}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {selectedPrescription.prescription?.notes && (
+                            <div className='py-3 text-xs text-gray-700 bg-gray-50 p-3 rounded-lg border'>
+                                <p className='font-semibold text-gray-800 mb-1'>Doctor's Advice & Instructions:</p>
+                                <p>{selectedPrescription.prescription.notes}</p>
+                            </div>
+                        )}
+
+                        <div className='flex justify-between items-center pt-4 border-t mt-4 print:hidden'>
+                            <button onClick={() => setSelectedPrescription(null)} className='px-4 py-1.5 border rounded text-xs text-gray-600'>Close</button>
+                            <button onClick={() => window.print()} className='px-4 py-1.5 bg-primary text-white rounded text-xs hover:opacity-90 font-medium'>
+                                Print / Download PDF
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }
