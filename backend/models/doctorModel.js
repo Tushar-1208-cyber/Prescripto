@@ -16,6 +16,11 @@ const doctorSchema = new mongoose.Schema({
     date: { type: Number, required: true },
     averageRating: { type: Number, default: 0 },
     reviewCount: { type: Number, default: 0 },
+    workingHours: {
+        start: { type: String, default: "10:00 AM" },
+        end: { type: String, default: "07:00 PM" }
+    },
+    daysOff: { type: [String], default: ["Sunday"] },
 }, { minimize: false })
 
 const doctorModel = mongoose.models.doctor || mongoose.model("doctor", doctorSchema);
