@@ -5,6 +5,7 @@ import { AppContext } from '../../context/AppContext'
 import { assets } from '../../assets/assets'
 import axios from 'axios'
 import { toast } from 'react-toastify'
+import DoctorChatModal from '../../components/DoctorChatModal'
 
 const DoctorAppointments = () => {
 
@@ -13,6 +14,7 @@ const DoctorAppointments = () => {
 
   // Prescription Modal State
   const [activeAppointment, setActiveAppointment] = useState(null)
+  const [chattingAppointment, setChattingAppointment] = useState(null)
   const [diagnosis, setDiagnosis] = useState('')
   const [notes, setNotes] = useState('')
   const [medicines, setMedicines] = useState([{ name: '', dosage: '', frequency: '' }])
@@ -121,12 +123,18 @@ const DoctorAppointments = () => {
                     <button onClick={() => openPrescriptionModal(item)} className='text-xs px-2.5 py-1 bg-indigo-50 text-indigo-600 border border-indigo-200 rounded hover:bg-indigo-600 hover:text-white transition-all'>
                       {item.prescription?.diagnosis ? 'Edit Rx' : '+ Write Rx'}
                     </button>
+                    <button onClick={() => setChattingAppointment(item)} className='text-xs px-2 py-1 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded hover:bg-emerald-600 hover:text-white flex items-center gap-1'>
+                      💬 Chat
+                    </button>
                   </div>
                 : <div className='flex items-center gap-2'>
                     <img onClick={() => cancelAppointment(item._id)} title="Cancel Appointment" className='w-8 cursor-pointer hover:opacity-80' src={assets.cancel_icon} alt="" />
                     <img onClick={() => completeAppointment(item._id)} title="Complete Appointment" className='w-8 cursor-pointer hover:opacity-80' src={assets.tick_icon} alt="" />
                     <button onClick={() => openPrescriptionModal(item)} className='text-xs px-2 py-1 bg-blue-50 text-blue-600 border border-blue-200 rounded hover:bg-blue-600 hover:text-white'>
                       Write Rx
+                    </button>
+                    <button onClick={() => setChattingAppointment(item)} className='text-xs px-2 py-1 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded hover:bg-emerald-600 hover:text-white flex items-center gap-1'>
+                      💬 Chat
                     </button>
                   </div>
             }
@@ -214,6 +222,14 @@ const DoctorAppointments = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Real-time Consultation Chat Modal */}
+      {chattingAppointment && (
+        <DoctorChatModal 
+          appointment={chattingAppointment} 
+          onClose={() => setChattingAppointment(null)} 
+        />
       )}
 
     </div>
