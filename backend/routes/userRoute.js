@@ -5,7 +5,7 @@ import authUser from '../middleware/authUser.js';
 import { loginLimiter } from '../middleware/rateLimiter.js';
 const userRouter = express.Router();
 
-userRouter.post("/register", registerUser)
+userRouter.post("/register", loginLimiter, registerUser)
 userRouter.post("/login", loginLimiter, loginUser)
 userRouter.post("/add-review", authUser, addReview)
 
