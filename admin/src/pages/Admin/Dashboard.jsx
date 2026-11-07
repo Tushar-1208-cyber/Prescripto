@@ -1,12 +1,31 @@
-import React, { useContext, useEffect } from 'react'
+import React, { useContext, useEffect, useState } from 'react'
 import { assets } from '../../assets/assets'
 import { AdminContext } from '../../context/AdminContext'
 import { AppContext } from '../../context/AppContext'
+import axios from 'axios'
+import { toast } from 'react-toastify'
 
 const Dashboard = () => {
 
-  const { aToken, getDashData, cancelAppointment, dashData } = useContext(AdminContext)
+  const { backendUrl, aToken, getDashData, cancelAppointment, dashData } = useContext(AdminContext)
   const { slotDateFormat } = useContext(AppContext)
+  const [sendingReminders, setSendingReminders] = useState(false)
+
+  const handleSendReminders = async () => {
+    try {
+      setSendingReminders(true)
+      const { data } = await axios.post(backendUrl + '/api/admin/send-reminders', {}, { headers: { aToken } })
+      if (data.success) {
+        toast.success(data.message)
+      } else {
+        toast.error(data.message)
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.message || error.message)
+    } finally {
+      setSendingReminders(false)
+    }
+  }
 
   useEffect(() => {
     if (aToken) {
@@ -16,6 +35,16 @@ const Dashboard = () => {
 
   return dashData && (
     <div className='m-5'>
+
+      <div className='flex justify-between items-center mb-5 flex-wrap gap-3'>
+        <h2 className='text-xl font-bold text-gray-800'>Admin Overview</h2>
+        <button 
+          onClick={handleSendReminders}
+          disabled={sendingReminders}
+          className='px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-all flex items-center gap-2 shadow-sm'>
+          ✉️ {sendingReminders ? 'Sending Reminders...' : 'Send Upcoming Visit Reminders'}
+        </button>
+      </div>
 
       <div className='flex flex-wrap gap-3'>
         <div className='flex items-center gap-2 bg-white p-4 min-w-52 rounded border-2 border-gray-100 cursor-pointer hover:scale-105 transition-all'>
