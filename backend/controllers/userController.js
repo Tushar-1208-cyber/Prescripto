@@ -242,7 +242,13 @@ const cancelAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Appointment is already cancelled' })
         }
 
-        await appointmentModel.findByIdAndUpdate(appointmentId, { cancelled: true })
+        const wasPaid = appointmentData.payment
+        const updatePayload = { cancelled: true }
+        if (wasPaid) {
+            updatePayload.refundStatus = 'refunded'
+        }
+
+        await appointmentModel.findByIdAndUpdate(appointmentId, updatePayload)
 
         // releasing doctor slot 
         const { docId, slotDate, slotTime } = appointmentData
@@ -263,7 +269,12 @@ const cancelAppointment = async (req, res) => {
             slotTime
         })
 
-        res.json({ success: true, message: 'Appointment Cancelled' })
+        res.json({
+            success: true,
+            message: wasPaid
+                ? 'Appointment Cancelled. Fee refund has been automatically initiated.'
+                : 'Appointment Cancelled'
+        })
 
     } catch (error) {
         console.log(error)
