@@ -11,6 +11,7 @@ const userSchema = new mongoose.Schema({
     password: { type: String, required: true },
     resetOtp: { type: String, default: '' },
     resetOtpExpire: { type: Number, default: 0 },
+    isBlocked: { type: Boolean, default: false },
 })
 
 const userModel = mongoose.models.user || mongoose.model("user", userSchema);
