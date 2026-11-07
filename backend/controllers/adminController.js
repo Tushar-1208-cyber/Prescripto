@@ -5,6 +5,7 @@ import bcrypt from "bcrypt";
 import validator from "validator";
 import { v2 as cloudinary } from "cloudinary";
 import userModel from "../models/userModel.js";
+import { sendAppointmentReminderEmail } from "../config/mailer.js";
 
 // API for admin login
 const loginAdmin = async (req, res) => {
@@ -157,11 +158,43 @@ const adminDashboard = async (req, res) => {
     }
 }
 
+// API to trigger upcoming appointment email reminders
+const sendReminders = async (_req, res) => {
+    try {
+        const upcomingAppointments = await appointmentModel.find({
+            cancelled: false,
+            isCompleted: false,
+            reminderSent24h: { $ne: true }
+        })
+
+        let sentCount = 0
+        for (const item of upcomingAppointments) {
+            if (item.userData?.email && item.docData?.name) {
+                await sendAppointmentReminderEmail({
+                    to: item.userData.email,
+                    userName: item.userData.name,
+                    docName: item.docData.name,
+                    slotDate: item.slotDate,
+                    slotTime: item.slotTime
+                })
+                await appointmentModel.findByIdAndUpdate(item._id, { reminderSent24h: true })
+                sentCount++
+            }
+        }
+
+        res.json({ success: true, message: `Reminders sent for ${sentCount} upcoming appointment(s)` })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
 export {
     loginAdmin,
     appointmentsAdmin,
     appointmentCancel,
     addDoctor,
     allDoctors,
-    adminDashboard
+    adminDashboard,
+    sendReminders
 }
