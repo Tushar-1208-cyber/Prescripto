@@ -16,6 +16,41 @@ const MyAppointments = () => {
     const [ratingValue, setRatingValue] = useState(5)
     const [comment, setComment] = useState('')
 
+    // Reschedule states
+    const [reschedulingId, setReschedulingId] = useState('')
+    const [rescheduleDate, setRescheduleDate] = useState('')
+    const [rescheduleTime, setRescheduleTime] = useState('10:00 AM')
+
+    const timeSlots = ["10:00 AM", "11:00 AM", "12:00 PM", "02:00 PM", "03:00 PM", "04:00 PM", "05:00 PM", "06:00 PM", "07:00 PM"]
+
+    const handleReschedule = async (appointmentId) => {
+        if (!rescheduleDate || !rescheduleTime) {
+            return toast.error("Please select a new date and time slot")
+        }
+        try {
+            // format date string eg 2026-11-10 to 10_11_2026
+            const dateParts = rescheduleDate.split('-')
+            const formattedSlotDate = `${Number(dateParts[2])}_${Number(dateParts[1])}_${dateParts[0]}`
+
+            const { data } = await axios.post(
+                backendUrl + '/api/user/reschedule-appointment',
+                { appointmentId, newSlotDate: formattedSlotDate, newSlotTime: rescheduleTime },
+                { headers: { token } }
+            )
+
+            if (data.success) {
+                toast.success(data.message)
+                setReschedulingId('')
+                setRescheduleDate('')
+                getUserAppointments()
+            } else {
+                toast.error(data.message)
+            }
+        } catch (error) {
+            toast.error(error.response?.data?.message || error.message)
+        }
+    }
+
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
     // Function to format the date eg. ( 20_01_2000 => 20 Jan 2000 )
@@ -171,9 +206,49 @@ const MyAppointments = () => {
                             {item.isCompleted && <button className='sm:min-w-48 py-2 border border-green-500 rounded text-green-500'>Completed</button>}
                             {item.isCompleted && reviewingId !== item._id && <button onClick={() => setReviewingId(item._id)} className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-primary hover:text-white transition-all duration-300'>Rate Doctor</button>}
 
-                            {!item.cancelled && !item.isCompleted && <button onClick={() => cancelAppointment(item._id)} className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-red-600 hover:text-white transition-all duration-300'>Cancel appointment</button>}
+                            {!item.cancelled && !item.isCompleted && (
+                                <>
+                                    <button onClick={() => setReschedulingId(reschedulingId === item._id ? '' : item._id)} className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-blue-600 hover:text-white transition-all duration-300'>
+                                        {reschedulingId === item._id ? 'Close Reschedule' : 'Reschedule Slot'}
+                                    </button>
+                                    <button onClick={() => cancelAppointment(item._id)} className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-red-600 hover:text-white transition-all duration-300'>Cancel appointment</button>
+                                </>
+                            )}
                             {item.cancelled && !item.isCompleted && <button className='sm:min-w-48 py-2 border border-red-500 rounded text-red-500'>Appointment cancelled</button>}
                         </div>
+
+                        {reschedulingId === item._id && (
+                            <div className='col-span-2 sm:flex-1 sm:w-full mt-2 p-4 border border-blue-200 bg-blue-50/40 rounded text-sm'>
+                                <p className='font-semibold text-gray-800 mb-2'>Select New Date & Time Slot:</p>
+                                <div className='flex flex-wrap items-center gap-3'>
+                                    <div>
+                                        <label className='block text-xs text-gray-600 mb-1'>New Date:</label>
+                                        <input 
+                                            type='date' 
+                                            min={new Date().toISOString().split('T')[0]} 
+                                            value={rescheduleDate} 
+                                            onChange={(e) => setRescheduleDate(e.target.value)} 
+                                            className='border rounded px-3 py-1.5 text-sm bg-white' 
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className='block text-xs text-gray-600 mb-1'>New Time Slot:</label>
+                                        <select 
+                                            value={rescheduleTime} 
+                                            onChange={(e) => setRescheduleTime(e.target.value)} 
+                                            className='border rounded px-3 py-1.5 text-sm bg-white'>
+                                            {timeSlots.map((slot, sIdx) => (
+                                                <option key={sIdx} value={slot}>{slot}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div className='flex gap-2 items-end mt-4'>
+                                        <button onClick={() => handleReschedule(item._id)} className='px-4 py-1.5 bg-primary text-white rounded text-sm hover:opacity-90'>Confirm New Slot</button>
+                                        <button onClick={() => setReschedulingId('')} className='px-4 py-1.5 border bg-white rounded text-sm'>Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         {reviewingId === item._id && (
                             <div className='col-span-2 sm:flex-1 sm:w-full mt-2 p-4 border rounded text-sm'>
