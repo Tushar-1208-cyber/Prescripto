@@ -4,6 +4,60 @@ import doctorModel from "../models/doctorModel.js";
 import appointmentModel from "../models/appointmentModel.js";
 import reviewModel from "../models/reviewModel.js";
 
+// API for self doctor registration
+const registerDoctor = async (req, res) => {
+    try {
+        const { name, email, password, speciality, degree, experience, about, fees, address } = req.body
+        const imageFile = req.file
+
+        if (!name || !email || !password || !speciality || !degree || !experience || !about || !fees) {
+            return res.status(400).json({ success: false, message: 'Please fill all required details' })
+        }
+
+        const existingDoc = await doctorModel.findOne({ email })
+        if (existingDoc) {
+            return res.status(409).json({ success: false, message: 'Doctor already exists with this email' })
+        }
+
+        const salt = await bcrypt.genSalt(10)
+        const hashedPassword = await bcrypt.hash(password, salt)
+
+        let imageUrl = 'https://via.placeholder.com/150'
+        if (imageFile) {
+            const cloudinaryModule = await import('cloudinary')
+            const cloudinary = cloudinaryModule.v2
+            const imageUpload = await cloudinary.uploader.upload(imageFile.path, { resource_type: "image" })
+            imageUrl = imageUpload.secure_url
+        }
+
+        const parsedAddress = typeof address === 'string' ? JSON.parse(address || '{}') : (address || {})
+
+        const doctorData = {
+            name,
+            email,
+            password: hashedPassword,
+            image: imageUrl,
+            speciality,
+            degree,
+            experience,
+            about,
+            fees: Number(fees),
+            address: parsedAddress,
+            isApproved: true,
+            date: Date.now()
+        }
+
+        const newDoc = new doctorModel(doctorData)
+        await newDoc.save()
+        const token = jwt.sign({ id: newDoc._id }, process.env.JWT_SECRET, { expiresIn: '7d' })
+
+        res.status(201).json({ success: true, message: 'Doctor registered successfully', token })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
 // API for doctor Login 
 const loginDoctor = async (req, res) => {
 
@@ -245,6 +299,7 @@ const addPrescription = async (req, res) => {
 }
 
 export {
+    registerDoctor,
     loginDoctor,
     appointmentsDoctor,
     appointmentCancel,
