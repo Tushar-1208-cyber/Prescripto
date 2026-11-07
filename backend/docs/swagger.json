@@ -1,0 +1,120 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Prescripto Healthcare API",
+    "version": "1.0.0",
+    "description": "Comprehensive RESTful API for Prescripto Doctor Consultation & Appointment Platform with Patient, Doctor, and Admin workspaces."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:4000",
+      "description": "Local Development Server"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "UserAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "token",
+        "description": "JWT token issued to registered users"
+      },
+      "DoctorAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "dtoken",
+        "description": "JWT token issued to registered doctors"
+      },
+      "AdminAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "atoken",
+        "description": "JWT token issued to admin"
+      }
+    }
+  },
+  "paths": {
+    "/api/user/register": {
+      "post": {
+        "summary": "Register a new patient account",
+        "tags": ["User"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "email", "password"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "email": { "type": "string" },
+                  "password": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "User created successfully" },
+          "400": { "description": "Validation error" }
+        }
+      }
+    },
+    "/api/user/login": {
+      "post": {
+        "summary": "User authentication",
+        "tags": ["User"],
+        "responses": {
+          "200": { "description": "Authentication successful" },
+          "401": { "description": "Invalid credentials" }
+        }
+      }
+    },
+    "/api/user/send-reset-otp": {
+      "post": {
+        "summary": "Send password reset OTP via email",
+        "tags": ["User"]
+      }
+    },
+    "/api/user/reset-password": {
+      "post": {
+        "summary": "Verify OTP and reset account password",
+        "tags": ["User"]
+      }
+    },
+    "/api/user/book-appointment": {
+      "post": {
+        "summary": "Book a doctor consultation slot with double-booking lock",
+        "tags": ["User"],
+        "security": [{ "UserAuth": [] }]
+      }
+    },
+    "/api/user/reschedule-appointment": {
+      "post": {
+        "summary": "Reschedule appointment to a new date and time slot",
+        "tags": ["User"],
+        "security": [{ "UserAuth": [] }]
+      }
+    },
+    "/api/doctor/register": {
+      "post": {
+        "summary": "Self-service doctor registration with credentials and photo",
+        "tags": ["Doctor"]
+      }
+    },
+    "/api/doctor/add-prescription": {
+      "post": {
+        "summary": "Doctor issues digital prescription with medicines & diagnosis",
+        "tags": ["Doctor"],
+        "security": [{ "DoctorAuth": [] }]
+      }
+    },
+    "/api/admin/send-reminders": {
+      "post": {
+        "summary": "Dispatch automated 24h visit reminders to booked patients",
+        "tags": ["Admin"],
+        "security": [{ "AdminAuth": [] }]
+      }
+    }
+  }
+}
