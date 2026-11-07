@@ -6,7 +6,10 @@ import {
     addDoctor,
     allDoctors,
     adminDashboard,
-    sendReminders
+    sendReminders,
+    allUsers,
+    toggleBlockUser,
+    deleteDoctor
 } from '../controllers/adminController.js';
 import { changeAvailablity } from '../controllers/doctorController.js';
 import authAdmin from '../middleware/authAdmin.js';
@@ -22,5 +25,8 @@ adminRouter.get("/all-doctors", authAdmin, allDoctors)
 adminRouter.post("/change-availability", authAdmin, changeAvailablity)
 adminRouter.get("/dashboard", authAdmin, adminDashboard)
 adminRouter.post("/send-reminders", authAdmin, sendReminders)
+adminRouter.get("/all-users", authAdmin, allUsers)
+adminRouter.post("/toggle-block-user", authAdmin, toggleBlockUser)
+adminRouter.post("/delete-doctor", authAdmin, deleteDoctor)
 
 export default adminRouter;
