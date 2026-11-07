@@ -1,54 +1,66 @@
-# Prescripto - Online Doctor Consultation Platform
+# Prescripto - Online Doctor Consultation & Appointment Platform
  
-Prescripto is a full-stack web application that enables patients to book appointments and consult with doctors anytime. With real-time interaction, secure authentication, and efficient appointment management, it simplifies healthcare access. Built with React, Node.js, and MongoDB, Prescripto ensures a seamless and user-friendly experience for both patients and doctors.
+Prescripto is a full-stack MERN healthcare application that enables patients to search specialists, book consultation slots in real-time, and make secure online payments. It features a three-tier portal architecture: Patient Client, Doctor Workspace, and Super Admin Management.
 
-## Features 
-- **Patient Portal**: Users can register, search for doctors, and book appointments. 
-- **Doctor Portal**: Doctors can manage appointments, interact with patients, and provide consultations. 
-- **Admin Dashboard**: Administrators can manage users, doctors, and overall platform activities.
-- **Real-time Interaction**: Patients can chat with doctors for quick medical advice.
-- **Secure Authentication**: User authentication with secure login and role-based access control.
-- **Appointment Management**: A streamlined booking system with notifications.
+## Key Features 
+- **Patient Portal**: Register, filter doctors by speciality, book appointments with real-time double-booking prevention, pay via Razorpay/Stripe, review doctors, and manage bookings.
+- **Doctor Portal**: Dedicated dashboard with earnings analytics, unique patient tracking, appointment status updates (Complete/Cancel), and live availability toggling.
+- **Admin Dashboard**: Comprehensive analytics, new doctor onboarding with Cloudinary photo uploads, and platform-wide appointment controls.
+- **Dual Payment Integration**: Secure payments through Razorpay (UPI, NetBanking, Cards) and Stripe with server-side validation.
+- **Automated Email Notifications**: Booking confirmation and cancellation email alerts powered by Nodemailer.
+- **Production-Ready Security**: JWT authentication, bcrypt password hashing, express-rate-limit protection against brute-force logins, and Helmet HTTP security headers.
  
 ## Tech Stack  
-- **Frontend**: React, HTML, CSS, JavaScript     
-- **Backend**: Node.js, Express.js 
-- **Database**: MongoDB  
-- **Authentication**: JWT-based authentication
-- **Hosting**: Deployed using cloud services (e.g., AWS, Vercel, or Firebase)
+- **Frontend & Admin**: React 18, Vite, Tailwind CSS, React Router v6, Axios, React Toastify
+- **Backend**: Node.js, Express.js
+- **Database**: MongoDB with Mongoose (Indexed queries & atomic slot constraints)
+- **File Storage**: Cloudinary & Multer
+- **Payment Gateways**: Razorpay & Stripe
+- **Email Service**: Nodemailer (SMTP)
  
-## Installation
-1. Clone the repository:
-   ```sh
-   git clone https://github.com/yourusername/prescripto.git
-   ```
-2. Navigate to the project directory:
-   ```sh
-   cd prescripto
-   ```
-3. Install dependencies for both frontend and backend:
-   ```sh
-   cd frontend && npm install
-   cd ../backend && npm install
-   ```
-4. Start the backend server:
-   ```sh
-   npm run server
-   ```
-5. Start the frontend server:
-   ```sh
-   cd frontend && npm start
-   
-   ```
+## Getting Started
+
+### 1. Clone the repository
+```bash
+git clone https://github.com/Tushar-1208-cyber/Prescripto.git
+cd Prescripto
+```
+
+### 2. Configure Environment Variables
+Copy `.env.example` in each folder and provide your credentials:
+```bash
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
+cp admin/.env.example admin/.env
+```
+
+### 3. Start the Backend API Server
+```bash
+cd backend
+npm install
+npm run server
+# Running at http://localhost:4000
+```
+
+### 4. Start the Frontend Application (Patient Portal)
+```bash
+cd frontend
+npm install
+npm run dev
+# Running at http://localhost:5173
+```
+
+### 5. Start the Admin & Doctor Dashboard
+```bash
+cd admin
+npm install
+npm run dev
+# Running at http://localhost:5174
+```
 
 ## Contribution
-Contributions are welcome! Feel free to fork the repository and submit pull requests.
+Contributions and feature suggestions are welcome! Feel free to fork the repository and submit a pull request.
 
 ## License
 This project is licensed under the MIT License.
-
----
-
-### Connect with Us
-For any queries or collaborations, reach out to us at [your contact info].
 
