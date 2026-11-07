@@ -3,7 +3,13 @@ import { AdminContext } from '../../context/AdminContext'
 
 const DoctorsList = () => {
 
-  const { doctors, changeAvailability , aToken , getAllDoctors} = useContext(AdminContext)
+  const { doctors, changeAvailability, aToken, getAllDoctors, deleteDoctor } = useContext(AdminContext)
+
+  const handleDelete = (docId, name) => {
+    if (window.confirm(`Are you sure you want to delete Dr. ${name} from Prescripto?`)) {
+      deleteDoctor(docId)
+    }
+  }
 
   useEffect(() => {
     if (aToken) {
@@ -24,9 +30,16 @@ const DoctorsList = () => {
               {item.reviewCount > 0 && (
                 <p className='text-yellow-500 text-sm mt-1'>★ {item.averageRating} ({item.reviewCount})</p>
               )}
-              <div className='mt-2 flex items-center gap-1 text-sm'>
-                <input onChange={()=>changeAvailability(item._id)} type="checkbox" checked={item.available} />
-                <p>Available</p>
+              <div className='mt-3 flex items-center justify-between text-sm'>
+                <label className='flex items-center gap-1 cursor-pointer'>
+                  <input onChange={()=>changeAvailability(item._id)} type="checkbox" checked={item.available} />
+                  <span className='text-xs'>Available</span>
+                </label>
+                <button 
+                  onClick={(e) => { e.stopPropagation(); handleDelete(item._id, item.name); }}
+                  className='text-xs px-2 py-0.5 text-red-600 border border-red-200 rounded hover:bg-red-600 hover:text-white transition-all'>
+                  Delete
+                </button>
               </div>
             </div>
           </div>
