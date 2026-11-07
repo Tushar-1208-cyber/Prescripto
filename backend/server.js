@@ -1,4 +1,6 @@
 import express from "express"
+import http from "http"
+import { Server as SocketIOServer } from "socket.io"
 import cors from 'cors'
 import helmet from 'helmet'
 import 'dotenv/config'
@@ -7,10 +9,48 @@ import connectCloudinary from "./config/cloudinary.js"
 import userRouter from "./routes/userRoute.js"
 import doctorRouter from "./routes/doctorRoute.js"
 import adminRouter from "./routes/adminRoute.js"
+import chatRouter from "./routes/chatRoute.js"
+import messageModel from "./models/messageModel.js"
 
 // app config
 const app = express()
 const port = process.env.PORT || 4000
+const httpServer = http.createServer(app)
+
+// Real-time Socket.io server
+const io = new SocketIOServer(httpServer, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+})
+
+io.on("connection", (socket) => {
+    socket.on("join_room", (appointmentId) => {
+        socket.join(`room_${appointmentId}`)
+    })
+
+    socket.on("send_message", async (data) => {
+        try {
+            const { appointmentId, senderId, senderName, senderRole, message } = data
+            if (appointmentId && message) {
+                const newMessage = new messageModel({
+                    appointmentId,
+                    senderId,
+                    senderName,
+                    senderRole,
+                    message,
+                    timestamp: Date.now()
+                })
+                await newMessage.save()
+                io.to(`room_${appointmentId}`).emit("receive_message", newMessage)
+            }
+        } catch (error) {
+            console.error("Socket error on send_message:", error.message)
+        }
+    })
+})
+
 connectDB()
 connectCloudinary()
 
@@ -38,6 +78,7 @@ app.use(cors({
 app.use("/api/user", userRouter)
 app.use("/api/admin", adminRouter)
 app.use("/api/doctor", doctorRouter)
+app.use("/api/chat", chatRouter)
 
 app.get("/", (_req, res) => {
   res.send("API Working")
@@ -53,4 +94,4 @@ app.use((err, _req, res, _next) => {
     })
 })
 
-app.listen(port, () => console.log(`Server started on PORT:${port}`))   
+httpServer.listen(port, () => console.log(`Server started on PORT:${port}`))   
