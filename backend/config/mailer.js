@@ -76,4 +76,22 @@ export const sendAppointmentCancellationEmail = async ({ to, userName, docName, 
     })
 }
 
-export default { sendAppointmentConfirmationEmail, sendAppointmentCancellationEmail }
+export const sendPasswordResetOtpEmail = async ({ to, userName, otp }) => {
+    return sendMail({
+        to,
+        subject: 'Prescripto - Password Reset OTP',
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 500px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                <h2 style="color: #4f46e5; margin-bottom: 12px;">Reset Your Password</h2>
+                <p>Hi ${userName || 'User'},</p>
+                <p>You requested to reset your password. Use the verification OTP below to proceed:</p>
+                <div style="font-size: 28px; font-weight: bold; letter-spacing: 6px; color: #1e293b; text-align: center; padding: 15px; background: #f1f5f9; border-radius: 6px; margin: 20px 0;">
+                    ${otp}
+                </div>
+                <p style="color: #64748b; font-size: 13px;">This OTP is valid for 10 minutes. If you did not request this, please ignore this email.</p>
+            </div>
+        `,
+    })
+}
+
+export default { sendAppointmentConfirmationEmail, sendAppointmentCancellationEmail, sendPasswordResetOtpEmail }
