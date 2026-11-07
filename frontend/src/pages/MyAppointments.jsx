@@ -4,6 +4,7 @@ import { AppContext } from '../context/AppContext'
 import axios from 'axios'
 import { toast } from 'react-toastify'
 import { assets } from '../assets/assets'
+import ChatModal from '../components/ChatModal'
 
 const MyAppointments = () => {
 
@@ -21,6 +22,7 @@ const MyAppointments = () => {
     const [rescheduleDate, setRescheduleDate] = useState('')
     const [rescheduleTime, setRescheduleTime] = useState('10:00 AM')
     const [selectedPrescription, setSelectedPrescription] = useState(null)
+    const [chattingAppointment, setChattingAppointment] = useState(null)
 
     const timeSlots = ["10:00 AM", "11:00 AM", "12:00 PM", "02:00 PM", "03:00 PM", "04:00 PM", "05:00 PM", "06:00 PM", "07:00 PM"]
 
@@ -210,6 +212,11 @@ const MyAppointments = () => {
                                     View Prescription (Rx)
                                 </button>
                             )}
+                            {!item.cancelled && (
+                                <button onClick={() => setChattingAppointment(item)} className='sm:min-w-48 py-2 border border-emerald-500 rounded text-emerald-600 bg-emerald-50 hover:bg-emerald-600 hover:text-white transition-all flex items-center justify-center gap-1.5'>
+                                    <span>💬</span> Chat with Doctor
+                                </button>
+                            )}
                             {item.isCompleted && reviewingId !== item._id && <button onClick={() => setReviewingId(item._id)} className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-primary hover:text-white transition-all duration-300'>Rate Doctor</button>}
 
                             {!item.cancelled && !item.isCompleted && (
@@ -347,6 +354,15 @@ const MyAppointments = () => {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* Real-time Consultation Chat Modal */}
+            {chattingAppointment && (
+                <ChatModal 
+                    appointment={chattingAppointment} 
+                    onClose={() => setChattingAppointment(null)} 
+                    currentUserRole="user" 
+                />
             )}
         </div>
     )
