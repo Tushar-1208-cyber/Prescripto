@@ -94,4 +94,23 @@ export const sendPasswordResetOtpEmail = async ({ to, userName, otp }) => {
     })
 }
 
-export default { sendAppointmentConfirmationEmail, sendAppointmentCancellationEmail, sendPasswordResetOtpEmail }
+export const sendAppointmentReminderEmail = async ({ to, userName, docName, slotDate, slotTime }) => {
+    return sendMail({
+        to,
+        subject: `Reminder: Upcoming appointment with Dr. ${docName}`,
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 500px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                <h2 style="color: #4f46e5; margin-bottom: 12px;">Appointment Reminder</h2>
+                <p>Hi ${userName},</p>
+                <p>This is a friendly reminder for your upcoming consultation with <b>Dr. ${docName}</b>.</p>
+                <div style="background: #f8fafc; border-left: 4px solid #4f46e5; padding: 12px 16px; margin: 16px 0;">
+                    <p style="margin: 0; font-weight: bold;">Date: ${slotDate}</p>
+                    <p style="margin: 4px 0 0 0; color: #475569;">Time: ${slotTime}</p>
+                </div>
+                <p style="color: #64748b; font-size: 13px;">Please arrive 10 minutes prior to your scheduled consultation time.</p>
+            </div>
+        `,
+    })
+}
+
+export default { sendAppointmentConfirmationEmail, sendAppointmentCancellationEmail, sendPasswordResetOtpEmail, sendAppointmentReminderEmail }
