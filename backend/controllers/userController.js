@@ -9,7 +9,7 @@ import reviewModel from "../models/reviewModel.js";
 import { v2 as cloudinary } from 'cloudinary'
 import stripe from "stripe";
 import razorpay from 'razorpay';
-import { sendAppointmentConfirmationEmail, sendAppointmentCancellationEmail } from "../config/mailer.js";
+import { sendAppointmentConfirmationEmail, sendAppointmentCancellationEmail, sendPasswordResetOtpEmail } from "../config/mailer.js";
 
 // Gateway Initialize
 const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY)
@@ -537,6 +537,135 @@ const addReview = async (req, res) => {
     }
 }
 
+// API to reschedule appointment
+const rescheduleAppointment = async (req, res) => {
+    try {
+        const { userId, appointmentId, newSlotDate, newSlotTime } = req.body
+
+        if (!appointmentId || !newSlotDate || !newSlotTime) {
+            return res.status(400).json({ success: false, message: 'Missing reschedule parameters' })
+        }
+
+        const appointment = await appointmentModel.findById(appointmentId)
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: 'Appointment not found' })
+        }
+
+        if (appointment.userId.toString() !== userId.toString()) {
+            return res.status(403).json({ success: false, message: 'Unauthorized action' })
+        }
+
+        if (appointment.cancelled) {
+            return res.status(400).json({ success: false, message: 'Cannot reschedule a cancelled appointment' })
+        }
+
+        if (appointment.isCompleted) {
+            return res.status(400).json({ success: false, message: 'Cannot reschedule a completed appointment' })
+        }
+
+        const doctorData = await doctorModel.findById(appointment.docId)
+        if (!doctorData || !doctorData.available) {
+            return res.status(400).json({ success: false, message: 'Doctor is currently not available' })
+        }
+
+        let slots_booked = doctorData.slots_booked || {}
+
+        // check if requested slot is already occupied
+        if (slots_booked[newSlotDate] && slots_booked[newSlotDate].includes(newSlotTime)) {
+            return res.status(409).json({ success: false, message: 'The requested slot is already booked' })
+        }
+
+        // Release old slot
+        const oldDate = appointment.slotDate
+        const oldTime = appointment.slotTime
+        if (slots_booked[oldDate]) {
+            slots_booked[oldDate] = slots_booked[oldDate].filter(t => t !== oldTime)
+        }
+
+        // Reserve new slot
+        if (!slots_booked[newSlotDate]) {
+            slots_booked[newSlotDate] = []
+        }
+        slots_booked[newSlotDate].push(newSlotTime)
+
+        await doctorModel.findByIdAndUpdate(appointment.docId, { slots_booked })
+        await appointmentModel.findByIdAndUpdate(appointmentId, {
+            slotDate: newSlotDate,
+            slotTime: newSlotTime
+        })
+
+        res.json({ success: true, message: 'Appointment rescheduled successfully' })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
+// API to send password reset OTP
+const sendResetOtp = async (req, res) => {
+    try {
+        const { email } = req.body
+        if (!email) {
+            return res.status(400).json({ success: false, message: 'Email is required' })
+        }
+
+        const user = await userModel.findOne({ email })
+        if (!user) {
+            return res.json({ success: true, message: 'If an account exists, a reset OTP has been sent' })
+        }
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString()
+        const otpExpire = Date.now() + 10 * 60 * 1000 // 10 minutes
+
+        user.resetOtp = otp
+        user.resetOtpExpire = otpExpire
+        await user.save()
+
+        await sendPasswordResetOtpEmail({
+            to: user.email,
+            userName: user.name,
+            otp
+        })
+
+        res.json({ success: true, message: 'Password reset OTP sent to your email' })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
+// API to verify OTP and reset password
+const resetPassword = async (req, res) => {
+    try {
+        const { email, otp, newPassword } = req.body
+        if (!email || !otp || !newPassword) {
+            return res.status(400).json({ success: false, message: 'Email, OTP, and new password are required' })
+        }
+
+        if (newPassword.length < 8) {
+            return res.status(400).json({ success: false, message: 'Password must be at least 8 characters long' })
+        }
+
+        const user = await userModel.findOne({ email })
+        if (!user || user.resetOtp !== otp || user.resetOtpExpire < Date.now()) {
+            return res.status(400).json({ success: false, message: 'Invalid or expired OTP' })
+        }
+
+        const salt = await bcrypt.genSalt(10)
+        const hashedPassword = await bcrypt.hash(newPassword, salt)
+
+        user.password = hashedPassword
+        user.resetOtp = ''
+        user.resetOtpExpire = 0
+        await user.save()
+
+        res.json({ success: true, message: 'Password reset successfully. You can now login.' })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
 export {
     loginUser,
     registerUser,
@@ -549,5 +678,8 @@ export {
     verifyRazorpay,
     paymentStripe,
     verifyStripe,
-    addReview
+    addReview,
+    rescheduleAppointment,
+    sendResetOtp,
+    resetPassword
 }
