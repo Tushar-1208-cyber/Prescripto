@@ -13,6 +13,7 @@ const appointmentSchema = new mongoose.Schema({
     payment: { type: Boolean, default: false },
     isCompleted: { type: Boolean, default: false },
     refundStatus: { type: String, default: 'none' }, // 'none', 'refunded'
+    reminderSent24h: { type: Boolean, default: false },
     prescription: {
         diagnosis: { type: String, default: '' },
         notes: { type: String, default: '' },
