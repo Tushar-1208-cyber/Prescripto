@@ -10,6 +10,7 @@ const DoctorRecommendation = () => {
 
     const [concern, setConcern] = useState('')
     const [budget, setBudget] = useState('')
+    const [allowExternalAI, setAllowExternalAI] = useState(false)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState(null)
     const [result, setResult] = useState(null)
@@ -32,7 +33,10 @@ const DoctorRecommendation = () => {
         setResult(null)
 
         try {
-            const payload = { concern: concern.trim() }
+            const payload = {
+                concern: concern.trim(),
+                allowExternalAI: Boolean(allowExternalAI)
+            }
             if (budget && Number(budget) > 0) {
                 payload.budget = Number(budget)
             }
@@ -134,6 +138,24 @@ const DoctorRecommendation = () => {
                     </div>
                 </div>
 
+                {/* AI Processing Consent Disclosure */}
+                <div className='mt-4 pt-4 border-t border-gray-100'>
+                    <label className='flex items-start gap-2.5 cursor-pointer text-xs text-gray-600 select-none'>
+                        <input
+                            type='checkbox'
+                            checked={allowExternalAI}
+                            onChange={(e) => setAllowExternalAI(e.target.checked)}
+                            className='mt-0.5 rounded border-gray-300 text-primary focus:ring-primary h-4 w-4'
+                        />
+                        <span>
+                            <span className='font-medium text-gray-800'>Allow external AI processing for enhanced speciality recommendation</span>
+                            <span className='block text-gray-500 text-[11px] mt-0.5'>
+                                When enabled, your symptoms are analyzed using Google Gemini AI. When unchecked (default), Prescripto uses local privacy-first triage with zero data sent to external AI providers.
+                            </span>
+                        </span>
+                    </label>
+                </div>
+
                 {error && (
                     <div className='mt-4 p-3.5 bg-rose-50 border border-rose-200 text-rose-700 text-xs sm:text-sm rounded-lg flex items-center gap-2'>
                         <span>⚠️</span>
@@ -170,9 +192,13 @@ const DoctorRecommendation = () => {
                                         <span className='text-xs font-semibold uppercase tracking-wider text-indigo-700'>
                                             Target Medical Speciality:
                                         </span>
-                                        {result.classification.source === 'ai' && (
+                                        {result.classification.source === 'ai' ? (
                                             <span className='text-[10px] bg-indigo-200 text-indigo-800 px-2 py-0.5 rounded-full font-medium'>
                                                 AI Assisted
+                                            </span>
+                                        ) : (
+                                            <span className='text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-medium'>
+                                                Local Privacy Triage
                                             </span>
                                         )}
                                     </div>
@@ -260,9 +286,13 @@ const DoctorRecommendation = () => {
                                                         <span className='text-xs px-2 py-0.5 bg-gray-50 text-gray-700 border border-gray-200 rounded-md font-medium'>
                                                             {currencySymbol}{doc.fees} Consultation
                                                         </span>
-                                                        {doc.hasUpcomingSlots && (
+                                                        {doc.hasUpcomingSlots ? (
                                                             <span className='text-[10px] px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md font-medium'>
                                                                 ● Slots Open
+                                                            </span>
+                                                        ) : (
+                                                            <span className='text-[10px] px-2 py-0.5 bg-gray-100 text-gray-600 border border-gray-300 rounded-md font-medium'>
+                                                                ● Fully Booked (7 Days)
                                                             </span>
                                                         )}
                                                     </div>
