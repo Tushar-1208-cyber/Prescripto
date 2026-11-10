@@ -14,6 +14,7 @@ import chatRouter from "./routes/chatRoute.js"
 import videoRouter from "./routes/videoRoute.js"
 import recommendationRouter from "./routes/recommendationRoute.js"
 import messageModel from "./models/messageModel.js"
+import appointmentModel from "./models/appointmentModel.js"
 import { initReminderScheduler } from "./services/scheduler.js"
 
 // app config
@@ -21,11 +22,22 @@ const app = express()
 const port = process.env.PORT || 4000
 const httpServer = http.createServer(app)
 
-// Real-time Socket.io server
+// CORS configuration supporting development and configurable production origins
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+    : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000']
+
+// Real-time Socket.io server with CORS restricted to configured allowed origins
 const io = new SocketIOServer(httpServer, {
     cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
+        origin: (origin, callback) => {
+            if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+                return callback(null, true)
+            }
+            return callback(new Error('Blocked by CORS policy'))
+        },
+        methods: ["GET", "POST"],
+        credentials: true
     }
 })
 
@@ -44,29 +56,158 @@ const verifyVideoSession = (sessionToken, appointmentId) => {
     }
 }
 
+// Helper to authenticate chat user token (patient or doctor)
+const verifyChatToken = (token) => {
+    if (!token) return null
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET)
+        if (decoded && decoded.id) {
+            return decoded.id.toString()
+        }
+        return null
+    } catch {
+        return null
+    }
+}
+
 io.on("connection", (socket) => {
-    // Existing text chat handlers
-    socket.on("join_room", (appointmentId) => {
-        socket.join(`room_${appointmentId}`)
+    // Authenticated text chat handlers
+    socket.on("join_room", async (data) => {
+        try {
+            const appointmentId = typeof data === 'object' && data !== null ? data.appointmentId : data
+            const token = (typeof data === 'object' && data !== null && (data.token || data.dtoken))
+                || socket.handshake.auth?.token
+                || socket.handshake.auth?.dtoken
+                || socket.handshake.headers?.token
+                || socket.handshake.headers?.dtoken
+
+            if (!appointmentId) {
+                return socket.emit("chat_error", { message: "Appointment ID is required" })
+            }
+
+            const callerId = verifyChatToken(token)
+            if (!callerId) {
+                return socket.emit("chat_error", { message: "Authentication required to join chat" })
+            }
+
+            const appointment = await appointmentModel.findById(appointmentId)
+            if (!appointment) {
+                return socket.emit("chat_error", { message: "Appointment not found" })
+            }
+
+            const isPatient = appointment.userId.toString() === callerId
+            const isDoctor = appointment.docId.toString() === callerId
+
+            if (!isPatient && !isDoctor) {
+                return socket.emit("chat_error", {
+                    message: "Unauthorized: You are not an assigned participant for this appointment"
+                })
+            }
+
+            const role = isPatient ? 'user' : 'doctor'
+            const name = isPatient
+                ? (appointment.userData?.name || 'Patient')
+                : `Dr. ${appointment.docData?.name || 'Doctor'}`
+
+            if (!socket.chatAuthorizedRooms) {
+                socket.chatAuthorizedRooms = new Map()
+            }
+            socket.chatAuthorizedRooms.set(appointmentId.toString(), {
+                participantId: callerId,
+                role,
+                name
+            })
+
+            socket.join(`room_${appointmentId}`)
+            socket.emit("room_joined", { appointmentId, role, name })
+        } catch (error) {
+            console.error("Socket error on join_room:", error.message)
+            socket.emit("chat_error", { message: "Error joining chat room" })
+        }
     })
 
     socket.on("send_message", async (data) => {
         try {
-            const { appointmentId, senderId, senderName, senderRole, message } = data
-            if (appointmentId && message) {
-                const newMessage = new messageModel({
-                    appointmentId,
-                    senderId,
-                    senderName,
-                    senderRole,
-                    message,
-                    timestamp: Date.now()
-                })
-                await newMessage.save()
-                io.to(`room_${appointmentId}`).emit("receive_message", newMessage)
+            const { appointmentId, message } = data || {}
+            if (!appointmentId || !message || typeof message !== 'string' || !message.trim()) {
+                return socket.emit("chat_error", { message: "Appointment ID and message text are required" })
             }
+
+            const trimmed = message.trim()
+            if (trimmed.length > 2000) {
+                return socket.emit("chat_error", { message: "Message exceeds maximum allowed length of 2000 characters" })
+            }
+
+            let participant = socket.chatAuthorizedRooms?.get(appointmentId.toString())
+
+            if (!participant) {
+                const token = (data && (data.token || data.dtoken))
+                    || socket.handshake.auth?.token
+                    || socket.handshake.auth?.dtoken
+                    || socket.handshake.headers?.token
+                    || socket.handshake.headers?.dtoken
+
+                const callerId = verifyChatToken(token)
+                if (!callerId) {
+                    return socket.emit("chat_error", { message: "Authentication required to send chat message" })
+                }
+
+                const appointment = await appointmentModel.findById(appointmentId)
+                if (!appointment) {
+                    return socket.emit("chat_error", { message: "Appointment not found" })
+                }
+
+                const isPatient = appointment.userId.toString() === callerId
+                const isDoctor = appointment.docId.toString() === callerId
+
+                if (!isPatient && !isDoctor) {
+                    return socket.emit("chat_error", {
+                        message: "Unauthorized: You are not an assigned participant for this appointment"
+                    })
+                }
+
+                const role = isPatient ? 'user' : 'doctor'
+                const name = isPatient
+                    ? (appointment.userData?.name || 'Patient')
+                    : `Dr. ${appointment.docData?.name || 'Doctor'}`
+
+                participant = { participantId: callerId, role, name }
+                if (!socket.chatAuthorizedRooms) {
+                    socket.chatAuthorizedRooms = new Map()
+                }
+                socket.chatAuthorizedRooms.set(appointmentId.toString(), participant)
+                socket.join(`room_${appointmentId}`)
+            }
+
+            // Derive sender details exclusively from verified participant metadata
+            const newMessage = new messageModel({
+                appointmentId: appointmentId.toString(),
+                senderId: participant.participantId,
+                senderName: participant.name,
+                senderRole: participant.role,
+                message: trimmed,
+                timestamp: Date.now()
+            })
+
+            await newMessage.save()
+            io.to(`room_${appointmentId}`).emit("receive_message", newMessage)
         } catch (error) {
             console.error("Socket error on send_message:", error.message)
+            socket.emit("chat_error", { message: "Failed to send message" })
+        }
+    })
+
+    socket.on("leave_room", (data) => {
+        try {
+            const appointmentId = typeof data === 'object' && data !== null ? data.appointmentId : data
+            if (appointmentId) {
+                socket.leave(`room_${appointmentId}`)
+                if (socket.chatAuthorizedRooms) {
+                    socket.chatAuthorizedRooms.delete(appointmentId.toString())
+                }
+            }
+        } catch (err) {
+            console.error("Socket error on leave_room:", err.message)
         }
     })
 
@@ -276,6 +417,9 @@ io.on("connection", (socket) => {
 
     socket.on("disconnect", () => {
         try {
+            if (socket.chatAuthorizedRooms) {
+                socket.chatAuthorizedRooms.clear()
+            }
             const apptId = socket.appointmentVideoRoom
             if (apptId && videoRooms.has(apptId)) {
                 const roomParticipants = videoRooms.get(apptId)
@@ -304,11 +448,6 @@ initReminderScheduler()
 // middlewares
 app.use(express.json())
 app.use(helmet())
-
-// CORS configuration supporting development and configurable production origins
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
-    : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000']
 
 app.use(cors({
     origin: (origin, callback) => {
