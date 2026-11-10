@@ -19,6 +19,7 @@ const VideoConsultationModal = ({ appointment, onClose }) => {
     const localStreamRef = useRef(null);
     const socketRef = useRef(null);
     const pendingCandidatesRef = useRef([]);
+    const sessionTokenRef = useRef(null);
 
     useEffect(() => {
         let isMounted = true;
@@ -41,6 +42,7 @@ const VideoConsultationModal = ({ appointment, onClose }) => {
 
                 if (!isMounted) return;
                 setSessionToken(data.sessionToken);
+                sessionTokenRef.current = data.sessionToken;
 
                 // Step 2: Request Camera & Microphone access
                 setStatusMessage('Requesting camera & microphone access...');
@@ -230,7 +232,7 @@ const VideoConsultationModal = ({ appointment, onClose }) => {
             if (socketRef.current) {
                 socketRef.current.emit('leave_video_call', {
                     appointmentId: appointment._id,
-                    sessionToken
+                    sessionToken: sessionTokenRef.current || sessionToken
                 });
                 socketRef.current.disconnect();
             }
@@ -273,7 +275,7 @@ const VideoConsultationModal = ({ appointment, onClose }) => {
         if (socketRef.current) {
             socketRef.current.emit('leave_video_call', {
                 appointmentId: appointment._id,
-                sessionToken
+                sessionToken: sessionTokenRef.current || sessionToken
             });
             socketRef.current.disconnect();
         }
@@ -325,14 +327,15 @@ const VideoConsultationModal = ({ appointment, onClose }) => {
                         }`}
                     />
 
-                    {/* Waiting / Connecting Placeholder */}
+                    {/* Waiting / Connecting / Disconnected Placeholder */}
                     {callStatus !== 'connected' && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 bg-gradient-to-b from-gray-900 to-black">
                             <div className="w-20 h-20 rounded-full bg-gray-800 border-2 border-primary/50 flex items-center justify-center text-3xl mb-4 shadow-lg">
-                                👨‍⚕️
+                                {callStatus === 'disconnected' ? '👋' : '👨‍⚕️'}
                             </div>
                             <h4 className="text-white font-medium text-lg mb-2">
                                 {callStatus === 'waiting' ? `Waiting for Dr. ${appointment.docData?.name || 'Doctor'} to join` :
+                                 callStatus === 'disconnected' ? 'Consultation Ended' :
                                  callStatus === 'error' ? 'Unable to Connect' : 'Connecting Consultation'}
                             </h4>
                             <p className="text-gray-400 text-sm max-w-md">
@@ -343,6 +346,14 @@ const VideoConsultationModal = ({ appointment, onClose }) => {
                                     <span className="animate-spin inline-block w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full" />
                                     The doctor will appear here as soon as they enter the consultation.
                                 </div>
+                            )}
+                            {callStatus === 'disconnected' && (
+                                <button
+                                    onClick={onClose}
+                                    className="mt-4 px-6 py-2 rounded-full bg-primary hover:bg-primary/90 text-white font-medium text-sm transition-all"
+                                >
+                                    Close Window
+                                </button>
                             )}
                         </div>
                     )}
