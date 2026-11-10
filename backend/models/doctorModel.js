@@ -16,7 +16,7 @@ const doctorSchema = new mongoose.Schema({
     date: { type: Number, required: true },
     averageRating: { type: Number, default: 0 },
     reviewCount: { type: Number, default: 0 },
-    isApproved: { type: Boolean, default: true },
+    isApproved: { type: Boolean, default: false },
     workingHours: {
         start: { type: String, default: "10:00 AM" },
         end: { type: String, default: "07:00 PM" }
