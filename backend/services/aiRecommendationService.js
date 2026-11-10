@@ -192,14 +192,29 @@ export const validateAiClassificationResponse = (parsed) => {
 
 /**
  * Classifies health concern using external AI model with seamless local fallback
+ * 
+ * Enforces explicit patient consent for external AI processing.
+ * When allowExternalAI is false/omitted, immediately routes to deterministic local triage.
  */
-export const classifyHealthConcern = async (concernText) => {
+export const classifyHealthConcern = async (concernText, options = {}) => {
+    const { allowExternalAI = false } = options || {};
+
     // 1. Check local emergency triggers first
     const localEmergency = checkEmergencyRedFlags(concernText);
 
-    // 2. Identify API configuration
+    // 2. If user has not consented to external AI processing, use local privacy-first triage
+    if (!allowExternalAI) {
+        const fallbackResult = classifyConcernFallback(concernText);
+        if (localEmergency) {
+            fallbackResult.isEmergency = true;
+            fallbackResult.urgencyMessage = EMERGENCY_WARNING_MESSAGE;
+        }
+        return fallbackResult;
+    }
+
+    // 3. Identify API configuration
     const apiKey = process.env.GEMINI_API_KEY || process.env.AI_API_KEY;
-    const model = process.env.AI_MODEL || process.env.GEMINI_MODEL || "gemini-1.5-flash";
+    const model = process.env.AI_MODEL || process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
     // If no API key configured, use local fallback
     if (!apiKey) {
