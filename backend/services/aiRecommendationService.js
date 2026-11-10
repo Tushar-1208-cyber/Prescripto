@@ -261,7 +261,6 @@ OUTPUT FORMAT: Return strictly valid JSON with no markdown formatting or extra t
                 }
             ],
             generationConfig: {
-                temperature: 0.1,
                 maxOutputTokens: 250,
                 responseMimeType: "application/json"
             }
