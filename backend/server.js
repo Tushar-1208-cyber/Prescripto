@@ -12,6 +12,7 @@ import doctorRouter from "./routes/doctorRoute.js"
 import adminRouter from "./routes/adminRoute.js"
 import chatRouter from "./routes/chatRoute.js"
 import videoRouter from "./routes/videoRoute.js"
+import recommendationRouter from "./routes/recommendationRoute.js"
 import messageModel from "./models/messageModel.js"
 import { initReminderScheduler } from "./services/scheduler.js"
 
@@ -326,6 +327,7 @@ app.use("/api/admin", adminRouter)
 app.use("/api/doctor", doctorRouter)
 app.use("/api/chat", chatRouter)
 app.use("/api/video", videoRouter)
+app.use("/api/recommendation", recommendationRouter)
 
 app.get("/", (_req, res) => {
   res.send("API Working")
