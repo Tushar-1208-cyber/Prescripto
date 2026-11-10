@@ -3,6 +3,7 @@ import bcrypt from "bcrypt";
 import doctorModel from "../models/doctorModel.js";
 import appointmentModel from "../models/appointmentModel.js";
 import reviewModel from "../models/reviewModel.js";
+import { sendAppointmentCancellationEmail } from "../config/mailer.js";
 
 // API for self doctor registration
 const registerDoctor = async (req, res) => {
@@ -109,15 +110,57 @@ const appointmentCancel = async (req, res) => {
 
         const appointmentData = await appointmentModel.findById(appointmentId)
         if (appointmentData && appointmentData.docId === docId) {
-            await appointmentModel.findByIdAndUpdate(appointmentId, { cancelled: true })
+            const wasPaid = appointmentData.payment
+            const updatePayload = { cancelled: true }
+            if (wasPaid) {
+                updatePayload.refundStatus = 'refunded'
+            }
+
+            await appointmentModel.findByIdAndUpdate(appointmentId, updatePayload)
+
+            // release doctor slot
+            const { slotDate, slotTime } = appointmentData
+            const doctorData = await doctorModel.findById(docId)
+            if (doctorData && doctorData.slots_booked && doctorData.slots_booked[slotDate]) {
+                let slots_booked = doctorData.slots_booked
+                slots_booked[slotDate] = slots_booked[slotDate].filter(e => e !== slotTime)
+                await doctorModel.findByIdAndUpdate(docId, { slots_booked })
+            }
+
+            // Task 3: Send cancellation email to patient (cancelled by Doctor)
+            const refundNote = wasPaid ? 'Fee refund has been automatically initiated.' : ''
+            sendAppointmentCancellationEmail({
+                to: appointmentData.userData?.email,
+                recipientName: appointmentData.userData?.name,
+                userName: appointmentData.userData?.name,
+                docName: doctorData?.name || appointmentData.docData?.name,
+                slotDate,
+                slotTime,
+                cancelledBy: `Dr. ${doctorData?.name || appointmentData.docData?.name || 'Doctor'}`,
+                refundInfo: refundNote
+            }).catch(err => console.log('[mailer] Doctor-cancellation email error:', err.message))
+
+            // Task 3: Also notify doctor confirmation
+            if (doctorData?.email) {
+                sendAppointmentCancellationEmail({
+                    to: doctorData.email,
+                    recipientName: `Dr. ${doctorData.name}`,
+                    userName: appointmentData.userData?.name,
+                    docName: doctorData.name,
+                    slotDate,
+                    slotTime,
+                    cancelledBy: 'Doctor'
+                }).catch(err => console.log('[mailer] Doctor confirmation cancellation email error:', err.message))
+            }
+
             return res.json({ success: true, message: 'Appointment Cancelled' })
         }
 
-        res.json({ success: false, message: 'Appointment Cancelled' })
+        res.json({ success: false, message: 'Appointment not found or unauthorized' })
 
     } catch (error) {
         console.log(error)
-        res.json({ success: false, message: error.message })
+        res.status(500).json({ success: false, message: error.message })
     }
 
 }
