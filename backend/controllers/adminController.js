@@ -5,7 +5,8 @@ import bcrypt from "bcrypt";
 import validator from "validator";
 import { v2 as cloudinary } from "cloudinary";
 import userModel from "../models/userModel.js";
-import { sendAppointmentReminderEmail } from "../config/mailer.js";
+import { sendAppointmentReminderEmail, sendAppointmentCancellationEmail } from "../config/mailer.js";
+import { checkAndSendReminders } from "../services/scheduler.js";
 
 // API for admin login
 const loginAdmin = async (req, res) => {
@@ -51,18 +52,65 @@ const appointmentsAdmin = async (req, res) => {
 
 }
 
-// API for appointment cancellation
+// API for appointment cancellation by admin
 const appointmentCancel = async (req, res) => {
     try {
 
         const { appointmentId } = req.body
-        await appointmentModel.findByIdAndUpdate(appointmentId, { cancelled: true })
+
+        const appointmentData = await appointmentModel.findById(appointmentId)
+        if (!appointmentData) {
+            return res.status(404).json({ success: false, message: 'Appointment not found' })
+        }
+
+        const wasPaid = appointmentData.payment
+        const updatePayload = { cancelled: true }
+        if (wasPaid) {
+            updatePayload.refundStatus = 'refunded'
+        }
+
+        await appointmentModel.findByIdAndUpdate(appointmentId, updatePayload)
+
+        // release doctor slot
+        const { docId, slotDate, slotTime } = appointmentData
+        const doctorData = await doctorModel.findById(docId)
+        if (doctorData && doctorData.slots_booked && doctorData.slots_booked[slotDate]) {
+            let slots_booked = doctorData.slots_booked
+            slots_booked[slotDate] = slots_booked[slotDate].filter(e => e !== slotTime)
+            await doctorModel.findByIdAndUpdate(docId, { slots_booked })
+        }
+
+        // Task 3: Notify patient of admin cancellation
+        const refundNote = wasPaid ? 'Fee refund has been automatically initiated.' : ''
+        sendAppointmentCancellationEmail({
+            to: appointmentData.userData?.email,
+            recipientName: appointmentData.userData?.name,
+            userName: appointmentData.userData?.name,
+            docName: doctorData?.name || appointmentData.docData?.name,
+            slotDate,
+            slotTime,
+            cancelledBy: 'Clinic Administration',
+            refundInfo: refundNote
+        }).catch(err => console.log('[mailer] Admin cancellation email to patient error:', err.message))
+
+        // Task 3: Notify doctor of admin cancellation
+        if (doctorData?.email) {
+            sendAppointmentCancellationEmail({
+                to: doctorData.email,
+                recipientName: `Dr. ${doctorData.name}`,
+                userName: appointmentData.userData?.name,
+                docName: doctorData.name,
+                slotDate,
+                slotTime,
+                cancelledBy: 'Clinic Administration'
+            }).catch(err => console.log('[mailer] Admin cancellation email to doctor error:', err.message))
+        }
 
         res.json({ success: true, message: 'Appointment Cancelled' })
 
     } catch (error) {
         console.log(error)
-        res.json({ success: false, message: error.message })
+        res.status(500).json({ success: false, message: error.message })
     }
 
 }
@@ -161,28 +209,15 @@ const adminDashboard = async (req, res) => {
 // API to trigger upcoming appointment email reminders
 const sendReminders = async (_req, res) => {
     try {
-        const upcomingAppointments = await appointmentModel.find({
-            cancelled: false,
-            isCompleted: false,
-            reminderSent24h: { $ne: true }
-        })
-
-        let sentCount = 0
-        for (const item of upcomingAppointments) {
-            if (item.userData?.email && item.docData?.name) {
-                await sendAppointmentReminderEmail({
-                    to: item.userData.email,
-                    userName: item.userData.name,
-                    docName: item.docData.name,
-                    slotDate: item.slotDate,
-                    slotTime: item.slotTime
-                })
-                await appointmentModel.findByIdAndUpdate(item._id, { reminderSent24h: true })
-                sentCount++
-            }
+        const result = await checkAndSendReminders()
+        if (result.error) {
+            return res.status(500).json({ success: false, message: result.error })
         }
 
-        res.json({ success: true, message: `Reminders sent for ${sentCount} upcoming appointment(s)` })
+        res.json({
+            success: true,
+            message: `Reminders processed: ${result.reminders24hSent} 24-hr reminder(s), ${result.reminders1hSent} 1-hr reminder(s) sent out of ${result.totalEvaluated} upcoming appointments evaluated.`
+        })
     } catch (error) {
         console.log(error)
         res.status(500).json({ success: false, message: error.message })
