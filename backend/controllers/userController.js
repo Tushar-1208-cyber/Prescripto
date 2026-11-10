@@ -9,7 +9,14 @@ import reviewModel from "../models/reviewModel.js";
 import { v2 as cloudinary } from 'cloudinary'
 import stripe from "stripe";
 import razorpay from 'razorpay';
-import { sendAppointmentConfirmationEmail, sendAppointmentCancellationEmail, sendPasswordResetOtpEmail } from "../config/mailer.js";
+import {
+    sendRegistrationWelcomeEmail,
+    sendAppointmentConfirmationEmail,
+    sendDoctorBookingNotificationEmail,
+    sendAppointmentCancellationEmail,
+    sendPaymentReceiptEmail,
+    sendPasswordResetOtpEmail
+} from "../config/mailer.js";
 
 // Gateway Initialize
 const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY)
@@ -57,6 +64,12 @@ const registerUser = async (req, res) => {
         const newUser = new userModel(userData)
         const user = await newUser.save()
         const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' })
+
+        // Task 1: Welcome email after registration (non-blocking)
+        sendRegistrationWelcomeEmail({
+            to: user.email,
+            userName: user.name
+        }).catch(err => console.log('[mailer] Non-blocking welcome email error:', err.message))
 
         res.status(201).json({ success: true, token })
 
@@ -199,14 +212,26 @@ const bookAppointment = async (req, res) => {
         slots_booked[slotDate].push(slotTime)
         await doctorModel.findByIdAndUpdate(docId, { slots_booked })
 
-        // send confirmation email (non-blocking for the booking flow)
+        // Task 2: Send confirmation email to patient (non-blocking)
         sendAppointmentConfirmationEmail({
             to: userData.email,
             userName: userData.name,
             docName: docData.name,
             slotDate,
             slotTime
-        })
+        }).catch(err => console.log('[mailer] Non-blocking patient confirmation email error:', err.message))
+
+        // Task 2: Send booking notification to doctor (non-blocking)
+        if (docData.email) {
+            sendDoctorBookingNotificationEmail({
+                to: docData.email,
+                docName: docData.name,
+                userName: userData.name,
+                slotDate,
+                slotTime,
+                amount: docData.fees
+            }).catch(err => console.log('[mailer] Non-blocking doctor booking email error:', err.message))
+        }
 
         res.status(201).json({ success: true, message: 'Appointment Booked' })
 
@@ -260,14 +285,31 @@ const cancelAppointment = async (req, res) => {
             await doctorModel.findByIdAndUpdate(docId, { slots_booked })
         }
 
-        // send cancellation email (non-blocking)
+        // Task 3: Send cancellation email to patient (non-blocking)
+        const refundNote = wasPaid ? 'Fee refund has been automatically initiated.' : ''
         sendAppointmentCancellationEmail({
             to: appointmentData.userData?.email,
+            recipientName: appointmentData.userData?.name,
             userName: appointmentData.userData?.name,
             docName: appointmentData.docData?.name,
             slotDate,
-            slotTime
-        })
+            slotTime,
+            cancelledBy: 'Patient',
+            refundInfo: refundNote
+        }).catch(err => console.log('[mailer] Non-blocking patient cancellation email error:', err.message))
+
+        // Task 3: Send cancellation notification to doctor (non-blocking)
+        if (doctorData?.email) {
+            sendAppointmentCancellationEmail({
+                to: doctorData.email,
+                recipientName: `Dr. ${doctorData.name}`,
+                userName: appointmentData.userData?.name,
+                docName: doctorData.name,
+                slotDate,
+                slotTime,
+                cancelledBy: 'Patient'
+            }).catch(err => console.log('[mailer] Non-blocking doctor cancellation email error:', err.message))
+        }
 
         res.json({
             success: true,
@@ -373,7 +415,26 @@ const verifyRazorpay = async (req, res) => {
         }
 
         if (orderInfo.status === 'paid') {
-            await appointmentModel.findByIdAndUpdate(orderInfo.receipt, { payment: true })
+            const alreadySent = appointment.receiptSent === true
+            await appointmentModel.findByIdAndUpdate(orderInfo.receipt, {
+                payment: true,
+                receiptSent: true
+            })
+
+            // Task 4: Payment Receipt email (duplicate-protected, non-blocking)
+            if (!alreadySent && appointment.userData?.email) {
+                sendPaymentReceiptEmail({
+                    to: appointment.userData.email,
+                    userName: appointment.userData.name,
+                    docName: appointment.docData?.name || 'Doctor',
+                    slotDate: appointment.slotDate,
+                    slotTime: appointment.slotTime,
+                    amount: appointment.amount,
+                    paymentMethod: 'Razorpay',
+                    transactionId: razorpay_payment_id || razorpay_order_id
+                }).catch(err => console.log('[mailer] Non-blocking Razorpay receipt email error:', err.message))
+            }
+
             res.json({ success: true, message: "Payment Successful" })
         } else {
             res.status(400).json({ success: false, message: 'Payment Failed or incomplete' })
@@ -462,7 +523,26 @@ const verifyStripe = async (req, res) => {
         if (session_id) {
             const session = await stripeInstance.checkout.sessions.retrieve(session_id)
             if (session.payment_status === 'paid') {
-                await appointmentModel.findByIdAndUpdate(appointmentId, { payment: true })
+                const alreadySent = appointmentData.receiptSent === true
+                await appointmentModel.findByIdAndUpdate(appointmentId, {
+                    payment: true,
+                    receiptSent: true
+                })
+
+                // Task 4: Payment Receipt email (duplicate-protected, non-blocking)
+                if (!alreadySent && appointmentData.userData?.email) {
+                    sendPaymentReceiptEmail({
+                        to: appointmentData.userData.email,
+                        userName: appointmentData.userData.name,
+                        docName: appointmentData.docData?.name || 'Doctor',
+                        slotDate: appointmentData.slotDate,
+                        slotTime: appointmentData.slotTime,
+                        amount: appointmentData.amount,
+                        paymentMethod: 'Stripe Checkout',
+                        transactionId: session_id
+                    }).catch(err => console.log('[mailer] Non-blocking Stripe receipt email error:', err.message))
+                }
+
                 return res.json({ success: true, message: 'Payment Successful' })
             } else {
                 return res.status(400).json({ success: false, message: 'Payment not completed on Stripe' })
@@ -471,7 +551,26 @@ const verifyStripe = async (req, res) => {
 
         // Fallback backward compatibility
         if (success === "true" || success === true) {
-            await appointmentModel.findByIdAndUpdate(appointmentId, { payment: true })
+            const alreadySent = appointmentData.receiptSent === true
+            await appointmentModel.findByIdAndUpdate(appointmentId, {
+                payment: true,
+                receiptSent: true
+            })
+
+            // Task 4: Payment Receipt email (duplicate-protected, non-blocking)
+            if (!alreadySent && appointmentData.userData?.email) {
+                sendPaymentReceiptEmail({
+                    to: appointmentData.userData.email,
+                    userName: appointmentData.userData.name,
+                    docName: appointmentData.docData?.name || 'Doctor',
+                    slotDate: appointmentData.slotDate,
+                    slotTime: appointmentData.slotTime,
+                    amount: appointmentData.amount,
+                    paymentMethod: 'Stripe',
+                    transactionId: 'N/A'
+                }).catch(err => console.log('[mailer] Non-blocking Stripe receipt email error:', err.message))
+            }
+
             return res.json({ success: true, message: 'Payment Successful' })
         }
 
