@@ -11,6 +11,7 @@ import doctorRouter from "./routes/doctorRoute.js"
 import adminRouter from "./routes/adminRoute.js"
 import chatRouter from "./routes/chatRoute.js"
 import messageModel from "./models/messageModel.js"
+import { initReminderScheduler } from "./services/scheduler.js"
 
 // app config
 const app = express()
@@ -53,6 +54,7 @@ io.on("connection", (socket) => {
 
 connectDB()
 connectCloudinary()
+initReminderScheduler()
 
 // middlewares
 app.use(express.json())
