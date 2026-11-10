@@ -108,7 +108,7 @@ export const classifyConcernFallback = (concernText) => {
         };
     }
 
-    // Score specialities based on keyword frequency
+    // Score specialities based on keyword frequency and clinical context
     const scores = [];
     for (const entry of KEYWORD_SPECIALITY_MAP) {
         let matchCount = 0;
@@ -116,7 +116,12 @@ export const classifyConcernFallback = (concernText) => {
             // Whole word or boundary match
             const regex = new RegExp(`\\b${kw}`, 'i');
             if (regex.test(text)) {
-                matchCount++;
+                // High-significance demographic context keywords (e.g. child, infant) count with weight 2
+                if (entry.speciality === 'Pediatricians' && ['child', 'baby', 'infant', 'toddler', 'kid', 'newborn', 'pediatric'].includes(kw)) {
+                    matchCount += 2;
+                } else {
+                    matchCount += 1;
+                }
             }
         }
         if (matchCount > 0) {
@@ -138,7 +143,7 @@ export const classifyConcernFallback = (concernText) => {
     }
 
     const matchedSpecialities = [scores[0].speciality];
-    if (scores.length > 1 && scores[1].count >= Math.ceil(scores[0].count * 0.6)) {
+    if (scores.length > 1 && (scores[1].count >= Math.ceil(scores[0].count * 0.5) || scores[0].count <= 2)) {
         matchedSpecialities.push(scores[1].speciality);
     }
 
