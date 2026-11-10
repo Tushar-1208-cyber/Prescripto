@@ -6,7 +6,7 @@ import { DoctorContext } from '../context/DoctorContext';
 let socket;
 
 const DoctorChatModal = ({ appointment, onClose }) => {
-    const { backendUrl, profileData } = useContext(DoctorContext);
+    const { backendUrl, profileData, dToken } = useContext(DoctorContext);
     const [messages, setMessages] = useState([]);
     const [text, setText] = useState('');
     const messagesEndRef = useRef(null);
@@ -16,12 +16,17 @@ const DoctorChatModal = ({ appointment, onClose }) => {
     };
 
     useEffect(() => {
-        socket = io(backendUrl);
-        socket.emit('join_room', appointment._id);
+        socket = io(backendUrl, {
+            auth: { dtoken: dToken, token: dToken }
+        });
+
+        socket.emit('join_room', { appointmentId: appointment._id, token: dToken });
 
         const fetchHistory = async () => {
             try {
-                const { data } = await axios.get(`${backendUrl}/api/chat/messages/${appointment._id}`);
+                const { data } = await axios.get(`${backendUrl}/api/chat/messages/${appointment._id}`, {
+                    headers: { dtoken: dToken }
+                });
                 if (data.success) {
                     setMessages(data.messages);
                 }
@@ -36,10 +41,15 @@ const DoctorChatModal = ({ appointment, onClose }) => {
             setMessages((prev) => [...prev, newMsg]);
         });
 
+        socket.on('chat_error', (err) => {
+            console.error('Doctor chat socket error:', err.message);
+        });
+
         return () => {
+            socket.emit('leave_room', { appointmentId: appointment._id });
             socket.disconnect();
         };
-    }, [appointment._id, backendUrl]);
+    }, [appointment._id, backendUrl, dToken]);
 
     useEffect(() => {
         scrollToBottom();
@@ -51,6 +61,7 @@ const DoctorChatModal = ({ appointment, onClose }) => {
 
         const msgData = {
             appointmentId: appointment._id,
+            token: dToken,
             senderId: appointment.docId,
             senderName: `Dr. ${profileData?.name || appointment.docData?.name || 'Doctor'}`,
             senderRole: 'doctor',
