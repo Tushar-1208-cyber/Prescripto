@@ -6,7 +6,7 @@ import { AppContext } from '../context/AppContext';
 let socket;
 
 const ChatModal = ({ appointment, onClose, currentUserRole = 'user' }) => {
-    const { backendUrl, userData } = useContext(AppContext);
+    const { backendUrl, userData, token } = useContext(AppContext);
     const [messages, setMessages] = useState([]);
     const [text, setText] = useState('');
     const messagesEndRef = useRef(null);
@@ -16,15 +16,19 @@ const ChatModal = ({ appointment, onClose, currentUserRole = 'user' }) => {
     };
 
     useEffect(() => {
-        // Connect socket
-        socket = io(backendUrl);
+        // Connect socket with JWT auth
+        socket = io(backendUrl, {
+            auth: { token }
+        });
 
-        socket.emit('join_room', appointment._id);
+        socket.emit('join_room', { appointmentId: appointment._id, token });
 
-        // Fetch past messages history
+        // Fetch past messages history with token header
         const fetchHistory = async () => {
             try {
-                const { data } = await axios.get(`${backendUrl}/api/chat/messages/${appointment._id}`);
+                const { data } = await axios.get(`${backendUrl}/api/chat/messages/${appointment._id}`, {
+                    headers: { token }
+                });
                 if (data.success) {
                     setMessages(data.messages);
                 }
@@ -40,10 +44,15 @@ const ChatModal = ({ appointment, onClose, currentUserRole = 'user' }) => {
             setMessages((prev) => [...prev, newMsg]);
         });
 
+        socket.on('chat_error', (err) => {
+            console.error('Chat error event:', err.message);
+        });
+
         return () => {
+            socket.emit('leave_room', { appointmentId: appointment._id });
             socket.disconnect();
         };
-    }, [appointment._id, backendUrl]);
+    }, [appointment._id, backendUrl, token]);
 
     useEffect(() => {
         scrollToBottom();
@@ -58,6 +67,7 @@ const ChatModal = ({ appointment, onClose, currentUserRole = 'user' }) => {
 
         const msgData = {
             appointmentId: appointment._id,
+            token,
             senderId,
             senderName,
             senderRole: currentUserRole,
