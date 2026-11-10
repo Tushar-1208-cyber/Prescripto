@@ -79,6 +79,11 @@ io.on("connection", (socket) => {
                 return socket.emit("video_room_error", { message: "Unauthorized video session token" })
             }
 
+            // Only 'patient' and 'doctor' roles are recognized
+            if (decoded.role !== 'patient' && decoded.role !== 'doctor') {
+                return socket.emit("video_room_error", { message: "Invalid participant role" })
+            }
+
             let roomParticipants = videoRooms.get(appointmentId)
             if (!roomParticipants) {
                 roomParticipants = new Map()
@@ -88,6 +93,15 @@ io.on("connection", (socket) => {
             // Enforce max 2 participants per appointment (Patient and Doctor)
             if (roomParticipants.size >= 2 && !roomParticipants.has(socket.id)) {
                 return socket.emit("video_room_error", { message: "Consultation room is full (maximum 2 participants)" })
+            }
+
+            // Enforce role exclusivity: two sockets belonging to the same role cannot occupy both slots
+            for (const [existingSocketId, existingParticipant] of roomParticipants.entries()) {
+                if (existingSocketId !== socket.id && existingParticipant.role === decoded.role) {
+                    return socket.emit("video_room_error", {
+                        message: `A participant with the role '${decoded.role}' is already present in this consultation.`
+                    })
+                }
             }
 
             // Record participant metadata
@@ -131,11 +145,33 @@ io.on("connection", (socket) => {
             const decoded = verifyVideoSession(sessionToken, appointmentId)
             if (!decoded || !sdp) return
 
-            socket.to(`video_${appointmentId}`).emit("video_offer", {
-                sdp,
-                senderRole: decoded.role,
-                senderName: decoded.name
-            })
+            const roomParticipants = videoRooms.get(appointmentId)
+            if (!roomParticipants || !roomParticipants.has(socket.id)) {
+                return socket.emit("video_room_error", { message: "Sender is not a joined participant in this room" })
+            }
+
+            // Verify sender identity and role to prevent impersonation
+            const registeredSender = roomParticipants.get(socket.id)
+            if (registeredSender.participantId !== decoded.participantId || registeredSender.role !== decoded.role) {
+                return socket.emit("video_room_error", { message: "Participant identity mismatch" })
+            }
+
+            // Target specifically the opposite peer socket in the room
+            let peerSocketId = null
+            for (const [sId] of roomParticipants.entries()) {
+                if (sId !== socket.id) {
+                    peerSocketId = sId
+                    break
+                }
+            }
+
+            if (peerSocketId) {
+                io.to(peerSocketId).emit("video_offer", {
+                    sdp,
+                    senderRole: decoded.role,
+                    senderName: decoded.name
+                })
+            }
         } catch (err) {
             console.error("[video] Error in video_offer:", err.message)
         }
@@ -147,11 +183,33 @@ io.on("connection", (socket) => {
             const decoded = verifyVideoSession(sessionToken, appointmentId)
             if (!decoded || !sdp) return
 
-            socket.to(`video_${appointmentId}`).emit("video_answer", {
-                sdp,
-                senderRole: decoded.role,
-                senderName: decoded.name
-            })
+            const roomParticipants = videoRooms.get(appointmentId)
+            if (!roomParticipants || !roomParticipants.has(socket.id)) {
+                return socket.emit("video_room_error", { message: "Sender is not a joined participant in this room" })
+            }
+
+            // Verify sender identity and role to prevent impersonation
+            const registeredSender = roomParticipants.get(socket.id)
+            if (registeredSender.participantId !== decoded.participantId || registeredSender.role !== decoded.role) {
+                return socket.emit("video_room_error", { message: "Participant identity mismatch" })
+            }
+
+            // Target specifically the opposite peer socket in the room
+            let peerSocketId = null
+            for (const [sId] of roomParticipants.entries()) {
+                if (sId !== socket.id) {
+                    peerSocketId = sId
+                    break
+                }
+            }
+
+            if (peerSocketId) {
+                io.to(peerSocketId).emit("video_answer", {
+                    sdp,
+                    senderRole: decoded.role,
+                    senderName: decoded.name
+                })
+            }
         } catch (err) {
             console.error("[video] Error in video_answer:", err.message)
         }
@@ -163,7 +221,29 @@ io.on("connection", (socket) => {
             const decoded = verifyVideoSession(sessionToken, appointmentId)
             if (!decoded || !candidate) return
 
-            socket.to(`video_${appointmentId}`).emit("new_ice_candidate", { candidate })
+            const roomParticipants = videoRooms.get(appointmentId)
+            if (!roomParticipants || !roomParticipants.has(socket.id)) {
+                return socket.emit("video_room_error", { message: "Sender is not a joined participant in this room" })
+            }
+
+            // Verify sender identity and role to prevent impersonation
+            const registeredSender = roomParticipants.get(socket.id)
+            if (registeredSender.participantId !== decoded.participantId || registeredSender.role !== decoded.role) {
+                return socket.emit("video_room_error", { message: "Participant identity mismatch" })
+            }
+
+            // Target specifically the opposite peer socket in the room
+            let peerSocketId = null
+            for (const [sId] of roomParticipants.entries()) {
+                if (sId !== socket.id) {
+                    peerSocketId = sId
+                    break
+                }
+            }
+
+            if (peerSocketId) {
+                io.to(peerSocketId).emit("new_ice_candidate", { candidate })
+            }
         } catch (err) {
             console.error("[video] Error in new_ice_candidate:", err.message)
         }
