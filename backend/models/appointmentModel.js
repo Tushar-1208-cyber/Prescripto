@@ -11,6 +11,8 @@ const appointmentSchema = new mongoose.Schema({
     date: { type: Number, required: true },
     cancelled: { type: Boolean, default: false },
     payment: { type: Boolean, default: false },
+    paymentMode: { type: String, enum: ['online', 'cash'], default: 'online' },
+    isCash: { type: Boolean, default: false },
     isCompleted: { type: Boolean, default: false },
     refundStatus: { type: String, default: 'none' }, // 'none', 'refunded'
     reminderSent24h: { type: Boolean, default: false },
