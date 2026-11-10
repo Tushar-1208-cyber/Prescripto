@@ -128,6 +128,25 @@ export const getDoctorRecommendations = async (req, res) => {
         const primarySpeciality = classification.matchedSpecialities[0] || 'General physician'
         const secondarySpeciality = classification.matchedSpecialities[1] || null
 
+        // Step 1.5: Emergency safety boundary
+        // Do not present ordinary doctor rankings as an alternative to emergency care
+        if (classification.isEmergency) {
+            return res.json({
+                success: true,
+                classification: {
+                    matchedSpecialities: classification.matchedSpecialities,
+                    explanation: classification.explanation,
+                    isVague: classification.isVague,
+                    isEmergency: true,
+                    urgencyMessage: classification.urgencyMessage,
+                    source: classification.source
+                },
+                recommendedDoctors: [],
+                totalFound: 0,
+                message: "Potential medical emergency detected. Please seek emergency medical care immediately."
+            })
+        }
+
         // Step 2: Query candidate doctors from MongoDB
         // Only select approved doctors matching the target specialities
         const targetSpecialities = classification.matchedSpecialities
