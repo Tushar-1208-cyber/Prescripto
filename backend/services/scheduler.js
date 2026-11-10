@@ -79,6 +79,13 @@ export const checkAndSendReminders = async () => {
 
             // 1-Hour Reminder Window: between 0 and 2 hours remaining
             if (diffHours <= 2 && !appt.reminderSent1h) {
+                // Atomic reservation: ensures only one worker in multi-instance/clustered environments sends the reminder
+                const claimed = await appointmentModel.findOneAndUpdate(
+                    { _id: appt._id, reminderSent1h: { $ne: true } },
+                    { $set: { reminderSent1h: true, reminderSent24h: true } }
+                )
+                if (!claimed) continue
+
                 await sendAppointmentReminderEmail({
                     to: userEmail,
                     userName,
@@ -88,16 +95,19 @@ export const checkAndSendReminders = async () => {
                     reminderType: '1-hour'
                 })
 
-                await appointmentModel.findByIdAndUpdate(appt._id, {
-                    reminderSent1h: true,
-                    reminderSent24h: true // Also mark 24h as completed so 24h reminder isn't sent after 1h reminder
-                })
                 reminders1hSent++
                 continue
             }
 
             // 24-Hour Reminder Window: between 2 and 24 hours remaining
             if (diffHours <= 24 && diffHours > 2 && !appt.reminderSent24h) {
+                // Atomic reservation: ensures only one worker in multi-instance/clustered environments sends the reminder
+                const claimed = await appointmentModel.findOneAndUpdate(
+                    { _id: appt._id, reminderSent24h: { $ne: true } },
+                    { $set: { reminderSent24h: true } }
+                )
+                if (!claimed) continue
+
                 await sendAppointmentReminderEmail({
                     to: userEmail,
                     userName,
@@ -107,9 +117,6 @@ export const checkAndSendReminders = async () => {
                     reminderType: '24-hour'
                 })
 
-                await appointmentModel.findByIdAndUpdate(appt._id, {
-                    reminderSent24h: true
-                })
                 reminders24hSent++
             }
         }
