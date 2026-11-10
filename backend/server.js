@@ -3,6 +3,7 @@ import http from "http"
 import { Server as SocketIOServer } from "socket.io"
 import cors from 'cors'
 import helmet from 'helmet'
+import jwt from "jsonwebtoken"
 import 'dotenv/config'
 import connectDB from "./config/mongodb.js"
 import connectCloudinary from "./config/cloudinary.js"
@@ -10,6 +11,7 @@ import userRouter from "./routes/userRoute.js"
 import doctorRouter from "./routes/doctorRoute.js"
 import adminRouter from "./routes/adminRoute.js"
 import chatRouter from "./routes/chatRoute.js"
+import videoRouter from "./routes/videoRoute.js"
 import messageModel from "./models/messageModel.js"
 import { initReminderScheduler } from "./services/scheduler.js"
 
@@ -26,7 +28,23 @@ const io = new SocketIOServer(httpServer, {
     }
 })
 
+// In-memory active video consultation rooms: appointmentId -> Map<socketId, participantData>
+const videoRooms = new Map()
+
+// Helper to authenticate video session token
+const verifyVideoSession = (sessionToken, appointmentId) => {
+    if (!sessionToken || !appointmentId) return null
+    try {
+        const decoded = jwt.verify(sessionToken, process.env.JWT_SECRET)
+        if (decoded.appointmentId !== appointmentId.toString()) return null
+        return decoded
+    } catch {
+        return null
+    }
+}
+
 io.on("connection", (socket) => {
+    // Existing text chat handlers
     socket.on("join_room", (appointmentId) => {
         socket.join(`room_${appointmentId}`)
     })
@@ -48,6 +66,149 @@ io.on("connection", (socket) => {
             }
         } catch (error) {
             console.error("Socket error on send_message:", error.message)
+        }
+    })
+
+    // Secure WebRTC Video Consultation signaling handlers
+    socket.on("join_video_room", (payload) => {
+        try {
+            const { appointmentId, sessionToken } = payload || {}
+            const decoded = verifyVideoSession(sessionToken, appointmentId)
+
+            if (!decoded) {
+                return socket.emit("video_room_error", { message: "Unauthorized video session token" })
+            }
+
+            let roomParticipants = videoRooms.get(appointmentId)
+            if (!roomParticipants) {
+                roomParticipants = new Map()
+                videoRooms.set(appointmentId, roomParticipants)
+            }
+
+            // Enforce max 2 participants per appointment (Patient and Doctor)
+            if (roomParticipants.size >= 2 && !roomParticipants.has(socket.id)) {
+                return socket.emit("video_room_error", { message: "Consultation room is full (maximum 2 participants)" })
+            }
+
+            // Record participant metadata
+            roomParticipants.set(socket.id, {
+                participantId: decoded.participantId,
+                role: decoded.role,
+                name: decoded.name
+            })
+            socket.appointmentVideoRoom = appointmentId
+            socket.join(`video_${appointmentId}`)
+
+            console.log(`[video] ${decoded.role} (${decoded.name}) joined video room for appointment ${appointmentId}`)
+
+            // Notify joining participant
+            socket.emit("video_room_joined", {
+                appointmentId,
+                participant: { role: decoded.role, name: decoded.name },
+                participantsCount: roomParticipants.size
+            })
+
+            // Notify other peer in the room
+            socket.to(`video_${appointmentId}`).emit("peer_joined", {
+                participantId: decoded.participantId,
+                role: decoded.role,
+                name: decoded.name
+            })
+
+            // If both Doctor and Patient are now present in the room, signal ready
+            if (roomParticipants.size === 2) {
+                io.to(`video_${appointmentId}`).emit("both_peers_ready", { appointmentId })
+            }
+        } catch (err) {
+            console.error("[video] Error in join_video_room:", err.message)
+            socket.emit("video_room_error", { message: err.message })
+        }
+    })
+
+    socket.on("video_offer", (payload) => {
+        try {
+            const { appointmentId, sessionToken, sdp } = payload || {}
+            const decoded = verifyVideoSession(sessionToken, appointmentId)
+            if (!decoded || !sdp) return
+
+            socket.to(`video_${appointmentId}`).emit("video_offer", {
+                sdp,
+                senderRole: decoded.role,
+                senderName: decoded.name
+            })
+        } catch (err) {
+            console.error("[video] Error in video_offer:", err.message)
+        }
+    })
+
+    socket.on("video_answer", (payload) => {
+        try {
+            const { appointmentId, sessionToken, sdp } = payload || {}
+            const decoded = verifyVideoSession(sessionToken, appointmentId)
+            if (!decoded || !sdp) return
+
+            socket.to(`video_${appointmentId}`).emit("video_answer", {
+                sdp,
+                senderRole: decoded.role,
+                senderName: decoded.name
+            })
+        } catch (err) {
+            console.error("[video] Error in video_answer:", err.message)
+        }
+    })
+
+    socket.on("new_ice_candidate", (payload) => {
+        try {
+            const { appointmentId, sessionToken, candidate } = payload || {}
+            const decoded = verifyVideoSession(sessionToken, appointmentId)
+            if (!decoded || !candidate) return
+
+            socket.to(`video_${appointmentId}`).emit("new_ice_candidate", { candidate })
+        } catch (err) {
+            console.error("[video] Error in new_ice_candidate:", err.message)
+        }
+    })
+
+    socket.on("leave_video_call", (payload) => {
+        try {
+            const { appointmentId, sessionToken } = payload || {}
+            const decoded = verifyVideoSession(sessionToken, appointmentId)
+
+            if (appointmentId && videoRooms.has(appointmentId)) {
+                const roomParticipants = videoRooms.get(appointmentId)
+                roomParticipants.delete(socket.id)
+                socket.leave(`video_${appointmentId}`)
+                socket.to(`video_${appointmentId}`).emit("peer_left", {
+                    message: `${decoded ? decoded.name : 'Participant'} has left the call`
+                })
+
+                if (roomParticipants.size === 0) {
+                    videoRooms.delete(appointmentId)
+                }
+            }
+        } catch (err) {
+            console.error("[video] Error in leave_video_call:", err.message)
+        }
+    })
+
+    socket.on("disconnect", () => {
+        try {
+            const apptId = socket.appointmentVideoRoom
+            if (apptId && videoRooms.has(apptId)) {
+                const roomParticipants = videoRooms.get(apptId)
+                const participantData = roomParticipants.get(socket.id)
+                roomParticipants.delete(socket.id)
+
+                socket.to(`video_${apptId}`).emit("peer_left", {
+                    message: `${participantData ? participantData.name : 'Participant'} disconnected`
+                })
+
+                if (roomParticipants.size === 0) {
+                    videoRooms.delete(apptId)
+                }
+            }
+        } catch (err) {
+            console.error("[video] Error during socket disconnect cleanup:", err.message)
         }
     })
 })
@@ -81,6 +242,7 @@ app.use("/api/user", userRouter)
 app.use("/api/admin", adminRouter)
 app.use("/api/doctor", doctorRouter)
 app.use("/api/chat", chatRouter)
+app.use("/api/video", videoRouter)
 
 app.get("/", (_req, res) => {
   res.send("API Working")
