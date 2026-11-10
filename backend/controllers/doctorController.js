@@ -44,15 +44,18 @@ const registerDoctor = async (req, res) => {
             about,
             fees: Number(fees),
             address: parsedAddress,
-            isApproved: true,
+            isApproved: false,
             date: Date.now()
         }
 
         const newDoc = new doctorModel(doctorData)
         await newDoc.save()
-        const token = jwt.sign({ id: newDoc._id }, process.env.JWT_SECRET, { expiresIn: '7d' })
 
-        res.status(201).json({ success: true, message: 'Doctor registered successfully', token })
+        res.status(201).json({
+            success: true,
+            message: 'Doctor registered successfully. Account is pending administrator approval.',
+            isApproved: false
+        })
     } catch (error) {
         console.log(error)
         res.status(500).json({ success: false, message: error.message })
@@ -68,18 +71,24 @@ const loginDoctor = async (req, res) => {
         const user = await doctorModel.findOne({ email })
 
         if (!user) {
-            return res.json({ success: false, message: "Invalid credentials" })
+            return res.status(401).json({ success: false, message: "Invalid credentials" })
         }
 
         const isMatch = await bcrypt.compare(password, user.password)
 
-        if (isMatch) {
-            const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' })
-            res.json({ success: true, token })
-        } else {
-            res.json({ success: false, message: "Invalid credentials" })
+        if (!isMatch) {
+            return res.status(401).json({ success: false, message: "Invalid credentials" })
         }
 
+        if (user.isApproved === false) {
+            return res.status(403).json({
+                success: false,
+                message: "Your account is pending administrator approval. Please contact support."
+            })
+        }
+
+        const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' })
+        res.json({ success: true, token })
 
     } catch (error) {
         console.log(error)
@@ -190,7 +199,7 @@ const appointmentComplete = async (req, res) => {
 const doctorList = async (req, res) => {
     try {
 
-        const doctors = await doctorModel.find({}).select(['-password', '-email'])
+        const doctors = await doctorModel.find({ isApproved: { $ne: false } }).select(['-password', '-email'])
         res.json({ success: true, doctors })
 
     } catch (error) {
