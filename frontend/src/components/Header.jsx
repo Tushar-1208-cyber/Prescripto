@@ -14,9 +14,14 @@ const Header = () => {
                     <img className='w-28' src={assets.group_profiles} alt="" />
                     <p>Simply browse through our extensive list of trusted doctors, <br className='hidden sm:block' /> schedule your appointment hassle-free.</p>
                 </div>
-                <a href='#speciality' className='flex items-center gap-2 bg-white px-8 py-3 rounded-full text-[#595959] text-sm m-auto md:m-0 hover:scale-105 transition-all duration-300'>
-                    Book appointment <img className='w-3' src={assets.arrow_icon} alt="" />
-                </a>
+                <div className='flex flex-wrap items-center gap-3 m-auto md:m-0'>
+                    <a href='#speciality' className='flex items-center gap-2 bg-white px-8 py-3 rounded-full text-[#595959] text-sm hover:scale-105 transition-all duration-300'>
+                        Book appointment <img className='w-3' src={assets.arrow_icon} alt="" />
+                    </a>
+                    <a href='/recommend-doctor' className='flex items-center gap-2 bg-white/15 backdrop-blur-sm border border-white/40 text-white px-6 py-3 rounded-full text-sm hover:bg-white hover:text-primary transition-all duration-300 font-medium'>
+                        <span>✨</span> Find by Symptoms
+                    </a>
+                </div>
             </div>
 
             {/* --------- Header Right --------- */}
