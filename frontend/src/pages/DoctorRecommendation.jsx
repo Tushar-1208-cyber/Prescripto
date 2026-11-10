@@ -148,9 +148,9 @@ const DoctorRecommendation = () => {
                             className='mt-0.5 rounded border-gray-300 text-primary focus:ring-primary h-4 w-4'
                         />
                         <span>
-                            <span className='font-medium text-gray-800'>Allow external AI processing for enhanced speciality recommendation</span>
+                            <span className='font-medium text-gray-800'>Send health concern to Google's external AI service (Gemini) for enhanced triage</span>
                             <span className='block text-gray-500 text-[11px] mt-0.5'>
-                                When enabled, your symptoms are analyzed using Google Gemini AI. When unchecked (default), Prescripto uses local privacy-first triage with zero data sent to external AI providers.
+                                When checked, your health concern text is sent to Google's external AI service (Google Gemini) for analysis. When unchecked (default), Prescripto uses local privacy-first triage on our server with zero data sent to external AI providers.
                             </span>
                         </span>
                     </label>
@@ -168,163 +168,175 @@ const DoctorRecommendation = () => {
             {result && (
                 <div className='space-y-8 animate-fadeIn'>
                     {/* Emergency Warning State */}
-                    {result.classification?.isEmergency && (
-                        <div className='bg-rose-50 border-2 border-rose-400 rounded-xl p-5 text-rose-900 shadow-sm'>
-                            <div className='flex items-center gap-3 mb-2'>
-                                <span className='text-2xl'>🚨</span>
-                                <h3 className='font-bold text-base sm:text-lg text-rose-800'>Urgent Medical Attention Required</h3>
+                    {result.classification?.isEmergency ? (
+                        <div className='bg-rose-50 border-2 border-rose-400 rounded-xl p-6 text-rose-900 shadow-sm'>
+                            <div className='flex items-center gap-3 mb-3'>
+                                <span className='text-3xl'>🚨</span>
+                                <h3 className='font-bold text-lg sm:text-xl text-rose-800'>Urgent Medical Attention Required</h3>
                             </div>
-                            <p className='text-sm text-rose-800 leading-relaxed font-medium'>
+                            <p className='text-sm sm:text-base text-rose-900 leading-relaxed font-semibold'>
                                 {result.classification.urgencyMessage || "Your symptoms may require urgent medical attention. Please contact your local emergency number or visit the nearest emergency department immediately."}
                             </p>
-                            <p className='text-xs text-rose-600 mt-2 italic'>
-                                Note: Routine online appointments are not a substitute for emergency department care in acute or life-threatening situations.
-                            </p>
-                        </div>
-                    )}
 
-                    {/* AI / Fallback Speciality Classification Summary */}
-                    {result.classification && (
-                        <div className='bg-indigo-50/70 border border-indigo-200 rounded-xl p-5'>
-                            <div className='flex flex-wrap items-center justify-between gap-3'>
-                                <div>
-                                    <div className='flex items-center gap-2'>
-                                        <span className='text-xs font-semibold uppercase tracking-wider text-indigo-700'>
-                                            Target Medical Speciality:
-                                        </span>
-                                        {result.classification.source === 'ai' ? (
-                                            <span className='text-[10px] bg-indigo-200 text-indigo-800 px-2 py-0.5 rounded-full font-medium'>
-                                                AI Assisted
-                                            </span>
-                                        ) : (
-                                            <span className='text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-medium'>
-                                                Local Privacy Triage
-                                            </span>
-                                        )}
+                            <div className='mt-4 p-4 bg-white/90 border border-rose-200 rounded-lg text-xs sm:text-sm text-rose-900 space-y-2'>
+                                <p className='font-bold text-rose-950 text-sm'>Immediate Actions:</p>
+                                <p>&bull; <strong>Call emergency medical services immediately:</strong> Dial 112 (India / EU), 911 (US), 999 (UK), or your local emergency ambulance provider.</p>
+                                <p>&bull; <strong>Visit the nearest hospital emergency room:</strong> Do not wait for a routine clinic appointment.</p>
+                            </div>
+
+                            <div className='mt-4 p-3.5 bg-rose-100/70 border border-rose-300 rounded-lg text-xs text-rose-800'>
+                                <p className='font-semibold'>Important Safety Notice:</p>
+                                <p className='mt-0.5'>
+                                    Routine outpatient doctor consultations are not suitable or offered as an alternative for life-threatening or acute medical emergencies. Prescripto does not provide medical diagnoses, and this automated red-flag screening is not exhaustive.
+                                </p>
+                            </div>
+                        </div>
+                    ) : (
+                        <>
+                            {/* AI / Fallback Speciality Classification Summary */}
+                            {result.classification && (
+                                <div className='bg-indigo-50/70 border border-indigo-200 rounded-xl p-5'>
+                                    <div className='flex flex-wrap items-center justify-between gap-3'>
+                                        <div>
+                                            <div className='flex items-center gap-2'>
+                                                <span className='text-xs font-semibold uppercase tracking-wider text-indigo-700'>
+                                                    Target Medical Speciality:
+                                                </span>
+                                                {result.classification.source === 'ai' ? (
+                                                    <span className='text-[10px] bg-indigo-200 text-indigo-800 px-2 py-0.5 rounded-full font-medium'>
+                                                        AI Assisted
+                                                    </span>
+                                                ) : (
+                                                    <span className='text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-medium'>
+                                                        Local Privacy Triage
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className='flex flex-wrap items-center gap-2 mt-1.5'>
+                                                {result.classification.matchedSpecialities.map((spec, sIdx) => (
+                                                    <span key={sIdx} className='px-3 py-1 bg-white border border-indigo-300 text-indigo-900 font-semibold rounded-lg text-sm shadow-sm'>
+                                                        {spec}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
                                     </div>
-                                    <div className='flex flex-wrap items-center gap-2 mt-1.5'>
-                                        {result.classification.matchedSpecialities.map((spec, sIdx) => (
-                                            <span key={sIdx} className='px-3 py-1 bg-white border border-indigo-300 text-indigo-900 font-semibold rounded-lg text-sm shadow-sm'>
-                                                {spec}
-                                            </span>
+                                    <p className='text-xs sm:text-sm text-indigo-950/80 mt-3 border-t border-indigo-100 pt-2.5'>
+                                        {result.classification.explanation}
+                                    </p>
+                                </div>
+                            )}
+
+                            {/* Recommended Doctors List */}
+                            <div>
+                                <div className='flex items-center justify-between mb-4'>
+                                    <h2 className='text-lg sm:text-xl font-semibold text-gray-800'>
+                                        Recommended Specialists ({result.recommendedDoctors?.length || 0})
+                                    </h2>
+                                    <span className='text-xs text-gray-500'>
+                                        Ranked by speciality match, rating, experience & availability
+                                    </span>
+                                </div>
+
+                                {(!result.recommendedDoctors || result.recommendedDoctors.length === 0) ? (
+                                    <div className='bg-white border border-gray-200 rounded-2xl p-10 text-center text-gray-500'>
+                                        <p className='text-base font-medium mb-1'>No matching specialists currently available.</p>
+                                        <p className='text-xs text-gray-400 mb-4'>
+                                            Try adjusting your budget or browse our complete directory of trusted doctors.
+                                        </p>
+                                        <button
+                                            onClick={() => navigate('/doctors')}
+                                            className='px-5 py-2 bg-primary text-white text-xs font-medium rounded-lg hover:bg-primary/90 transition-all'
+                                        >
+                                            Browse All Doctors
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className='grid grid-cols-1 md:grid-cols-2 gap-5'>
+                                        {result.recommendedDoctors.map((doc, idx) => (
+                                            <div
+                                                key={doc._id || idx}
+                                                className='bg-white border border-gray-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between border-t-4 border-t-primary'
+                                            >
+                                                <div>
+                                                    {/* Rank Badge & Match Rationale */}
+                                                    <div className='flex items-center justify-between mb-3 text-xs'>
+                                                        <span className='px-2 py-0.5 bg-primary/10 text-primary font-bold rounded-md'>
+                                                            #{idx + 1} Best Match
+                                                        </span>
+                                                        <span className='text-gray-400 font-medium'>
+                                                            Score: {Math.round(doc.recommendationScore * 100)}%
+                                                        </span>
+                                                    </div>
+
+                                                    {/* Doctor Info Row */}
+                                                    <div className='flex items-start gap-4'>
+                                                        <img
+                                                            src={doc.image || assets.profile_pic}
+                                                            alt={doc.name}
+                                                            className='w-16 h-16 rounded-xl object-cover bg-gray-100 border'
+                                                        />
+                                                        <div className='flex-1 min-w-0'>
+                                                            <h3 className='text-base font-semibold text-gray-900 truncate'>
+                                                                {doc.name}
+                                                            </h3>
+                                                            <p className='text-xs text-primary font-medium'>
+                                                                {doc.speciality} &bull; <span className='text-gray-500'>{doc.degree}</span>
+                                                            </p>
+                                                            <p className='text-xs text-gray-500 mt-0.5'>
+                                                                {doc.experience || 'Experienced practitioner'}
+                                                            </p>
+                                                            
+                                                            {/* Rating & Fee badges */}
+                                                            <div className='flex flex-wrap items-center gap-2 mt-2'>
+                                                                <span className='inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-md font-medium'>
+                                                                    ★ {doc.averageRating > 0 ? doc.averageRating.toFixed(1) : 'New'}
+                                                                    <span className='text-amber-500'>({doc.reviewCount || 0})</span>
+                                                                </span>
+                                                                <span className='text-xs px-2 py-0.5 bg-gray-50 text-gray-700 border border-gray-200 rounded-md font-medium'>
+                                                                    {currencySymbol}{doc.fees} Consultation
+                                                                </span>
+                                                                {doc.hasUpcomingSlots ? (
+                                                                    <span className='text-[10px] px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md font-medium'>
+                                                                        ● Slots Open
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className='text-[10px] px-2 py-0.5 bg-gray-100 text-gray-600 border border-gray-300 rounded-md font-medium'>
+                                                                        ● Fully Booked (7 Days)
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Match Reason Pill */}
+                                                    {doc.whyRecommended && (
+                                                        <div className='mt-3.5 pt-3 border-t border-gray-100 text-xs text-gray-600 bg-gray-50/60 p-2.5 rounded-lg'>
+                                                            <span className='font-semibold text-gray-700'>Why matched: </span>
+                                                            {doc.whyRecommended}
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* Action Button */}
+                                                <div className='mt-4 pt-3 border-t border-gray-100 flex items-center justify-between gap-3'>
+                                                    <button
+                                                        onClick={() => {
+                                                            navigate(`/appointment/${doc._id}`)
+                                                            window.scrollTo(0, 0)
+                                                        }}
+                                                        className='w-full py-2 bg-primary hover:bg-primary/90 text-white rounded-lg text-xs font-semibold transition-all shadow hover:shadow-md flex items-center justify-center gap-1.5'
+                                                    >
+                                                        <span>📅</span> Book Consultation
+                                                    </button>
+                                                </div>
+                                            </div>
                                         ))}
                                     </div>
-                                </div>
+                                )}
                             </div>
-                            <p className='text-xs sm:text-sm text-indigo-950/80 mt-3 border-t border-indigo-100 pt-2.5'>
-                                {result.classification.explanation}
-                            </p>
-                        </div>
+                        </>
                     )}
-
-                    {/* Recommended Doctors List */}
-                    <div>
-                        <div className='flex items-center justify-between mb-4'>
-                            <h2 className='text-lg sm:text-xl font-semibold text-gray-800'>
-                                Recommended Specialists ({result.recommendedDoctors?.length || 0})
-                            </h2>
-                            <span className='text-xs text-gray-500'>
-                                Ranked by speciality match, rating, experience & availability
-                            </span>
-                        </div>
-
-                        {(!result.recommendedDoctors || result.recommendedDoctors.length === 0) ? (
-                            <div className='bg-white border border-gray-200 rounded-2xl p-10 text-center text-gray-500'>
-                                <p className='text-base font-medium mb-1'>No matching specialists currently available.</p>
-                                <p className='text-xs text-gray-400 mb-4'>
-                                    Try adjusting your budget or browse our complete directory of trusted doctors.
-                                </p>
-                                <button
-                                    onClick={() => navigate('/doctors')}
-                                    className='px-5 py-2 bg-primary text-white text-xs font-medium rounded-lg hover:bg-primary/90 transition-all'
-                                >
-                                    Browse All Doctors
-                                </button>
-                            </div>
-                        ) : (
-                            <div className='grid grid-cols-1 md:grid-cols-2 gap-5'>
-                                {result.recommendedDoctors.map((doc, idx) => (
-                                    <div
-                                        key={doc._id || idx}
-                                        className='bg-white border border-gray-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between border-t-4 border-t-primary'
-                                    >
-                                        <div>
-                                            {/* Rank Badge & Match Rationale */}
-                                            <div className='flex items-center justify-between mb-3 text-xs'>
-                                                <span className='px-2 py-0.5 bg-primary/10 text-primary font-bold rounded-md'>
-                                                    #{idx + 1} Best Match
-                                                </span>
-                                                <span className='text-gray-400 font-medium'>
-                                                    Score: {Math.round(doc.recommendationScore * 100)}%
-                                                </span>
-                                            </div>
-
-                                            {/* Doctor Info Row */}
-                                            <div className='flex items-start gap-4'>
-                                                <img
-                                                    src={doc.image || assets.profile_pic}
-                                                    alt={doc.name}
-                                                    className='w-16 h-16 rounded-xl object-cover bg-gray-100 border'
-                                                />
-                                                <div className='flex-1 min-w-0'>
-                                                    <h3 className='text-base font-semibold text-gray-900 truncate'>
-                                                        {doc.name}
-                                                    </h3>
-                                                    <p className='text-xs text-primary font-medium'>
-                                                        {doc.speciality} &bull; <span className='text-gray-500'>{doc.degree}</span>
-                                                    </p>
-                                                    <p className='text-xs text-gray-500 mt-0.5'>
-                                                        {doc.experience || 'Experienced practitioner'}
-                                                    </p>
-                                                    
-                                                    {/* Rating & Fee badges */}
-                                                    <div className='flex flex-wrap items-center gap-2 mt-2'>
-                                                        <span className='inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-md font-medium'>
-                                                            ★ {doc.averageRating > 0 ? doc.averageRating.toFixed(1) : 'New'}
-                                                            <span className='text-amber-500'>({doc.reviewCount || 0})</span>
-                                                        </span>
-                                                        <span className='text-xs px-2 py-0.5 bg-gray-50 text-gray-700 border border-gray-200 rounded-md font-medium'>
-                                                            {currencySymbol}{doc.fees} Consultation
-                                                        </span>
-                                                        {doc.hasUpcomingSlots ? (
-                                                            <span className='text-[10px] px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md font-medium'>
-                                                                ● Slots Open
-                                                            </span>
-                                                        ) : (
-                                                            <span className='text-[10px] px-2 py-0.5 bg-gray-100 text-gray-600 border border-gray-300 rounded-md font-medium'>
-                                                                ● Fully Booked (7 Days)
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            {/* Match Reason Pill */}
-                                            {doc.whyRecommended && (
-                                                <div className='mt-3.5 pt-3 border-t border-gray-100 text-xs text-gray-600 bg-gray-50/60 p-2.5 rounded-lg'>
-                                                    <span className='font-semibold text-gray-700'>Why matched: </span>
-                                                    {doc.whyRecommended}
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        {/* Action Button */}
-                                        <div className='mt-4 pt-3 border-t border-gray-100 flex items-center justify-between gap-3'>
-                                            <button
-                                                onClick={() => {
-                                                    navigate(`/appointment/${doc._id}`)
-                                                    window.scrollTo(0, 0)
-                                                }}
-                                                className='w-full py-2 bg-primary hover:bg-primary/90 text-white rounded-lg text-xs font-semibold transition-all shadow hover:shadow-md flex items-center justify-center gap-1.5'
-                                            >
-                                                <span>📅</span> Book Consultation
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
                 </div>
             )}
         </div>
