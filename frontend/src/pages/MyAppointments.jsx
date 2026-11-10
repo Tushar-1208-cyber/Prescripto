@@ -214,7 +214,7 @@ const MyAppointments = () => {
                                     View Prescription (Rx)
                                 </button>
                             )}
-                            {!item.cancelled && !item.isCompleted && (
+                            {!item.cancelled && !item.isCompleted && (item.payment || item.paymentMode === 'cash' || item.isCash) && (
                                 <button onClick={() => setVideoAppointment(item)} className='sm:min-w-48 py-2 border border-blue-500 rounded text-blue-600 bg-blue-50 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center gap-1.5 font-medium'>
                                     <span>📹</span> Video Consultation
                                 </button>
