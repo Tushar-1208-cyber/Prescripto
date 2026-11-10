@@ -1,6 +1,9 @@
 import cron from "node-cron"
 import appointmentModel from "../models/appointmentModel.js"
-import { sendAppointmentReminderEmail } from "../config/mailer.js"
+import { sendAppointmentReminderEmail, sendPaymentReceiptEmail } from "../config/mailer.js"
+
+// Timeout after which a 'sending' claim is considered stale and available for recovery
+export const CLAIM_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
 
 /**
  * Parses appointment slot date and time into a JavaScript Date object.
@@ -43,18 +46,21 @@ export const parseAppointmentSlot = (slotDate, slotTime) => {
 }
 
 /**
- * Checks all active appointments and triggers 24-hour and 1-hour email reminders.
- * Returns statistics of reminders evaluated and dispatched.
+ * Checks all active appointments and triggers 24-hour and 1-hour email reminders
+ * using a safe pending -> sending -> sent/failed state machine with stale claim recovery.
  */
 export const checkAndSendReminders = async () => {
     try {
         const now = new Date()
+        const staleThreshold = new Date(Date.now() - CLAIM_TIMEOUT_MS)
+
+        // Find candidate appointments that have not yet confirmed successful delivery
         const upcomingAppointments = await appointmentModel.find({
             cancelled: false,
             isCompleted: false,
             $or: [
-                { reminderSent24h: { $ne: true } },
-                { reminderSent1h: { $ne: true } }
+                { reminderSent24h: { $ne: true }, reminder24hStatus: { $ne: 'sent' } },
+                { reminderSent1h: { $ne: true }, reminder1hStatus: { $ne: 'sent' } }
             ]
         })
 
@@ -78,15 +84,33 @@ export const checkAndSendReminders = async () => {
             if (!userEmail) continue
 
             // 1-Hour Reminder Window: between 0 and 2 hours remaining
-            if (diffHours <= 2 && !appt.reminderSent1h) {
-                // Atomic reservation: ensures only one worker in multi-instance/clustered environments sends the reminder
+            if (diffHours <= 2 && appt.reminderSent1h !== true && appt.reminder1hStatus !== 'sent') {
+                // Atomic claim: only proceed if status is pending/failed OR sending claim has gone stale
                 const claimed = await appointmentModel.findOneAndUpdate(
-                    { _id: appt._id, reminderSent1h: { $ne: true } },
-                    { $set: { reminderSent1h: true, reminderSent24h: true } }
+                    {
+                        _id: appt._id,
+                        reminder1hStatus: { $ne: 'sent' },
+                        reminderSent1h: { $ne: true },
+                        $or: [
+                            { reminder1hStatus: { $in: ['pending', 'failed'] } },
+                            { reminder1hStatus: 'sending', reminder1hClaimedAt: { $lt: staleThreshold } },
+                            { reminder1hClaimedAt: null },
+                            { reminder1hClaimedAt: { $exists: false } }
+                        ]
+                    },
+                    {
+                        $set: {
+                            reminder1hStatus: 'sending',
+                            reminder1hClaimedAt: new Date()
+                        }
+                    },
+                    { new: true }
                 )
+
                 if (!claimed) continue
 
-                await sendAppointmentReminderEmail({
+                // Attempt email delivery
+                const mailResult = await sendAppointmentReminderEmail({
                     to: userEmail,
                     userName,
                     docName,
@@ -95,20 +119,59 @@ export const checkAndSendReminders = async () => {
                     reminderType: '1-hour'
                 })
 
-                reminders1hSent++
+                if (mailResult && mailResult.sent) {
+                    // Mark as sent ONLY after mailer confirms successful delivery
+                    await appointmentModel.findByIdAndUpdate(appt._id, {
+                        $set: {
+                            reminder1hStatus: 'sent',
+                            reminderSent1h: true,
+                            reminder1hClaimedAt: null,
+                            reminder24hStatus: 'sent',
+                            reminderSent24h: true
+                        }
+                    })
+                    reminders1hSent++
+                } else {
+                    // If delivery fails, release claim and mark failed so it can be retried
+                    console.log(`[scheduler] 1-hour reminder delivery failed for appointment ${appt._id}. Releasing claim for retry.`)
+                    await appointmentModel.findByIdAndUpdate(appt._id, {
+                        $set: {
+                            reminder1hStatus: 'failed',
+                            reminder1hClaimedAt: null
+                        }
+                    })
+                }
                 continue
             }
 
             // 24-Hour Reminder Window: between 2 and 24 hours remaining
-            if (diffHours <= 24 && diffHours > 2 && !appt.reminderSent24h) {
-                // Atomic reservation: ensures only one worker in multi-instance/clustered environments sends the reminder
+            if (diffHours <= 24 && diffHours > 2 && appt.reminderSent24h !== true && appt.reminder24hStatus !== 'sent') {
+                // Atomic claim: only proceed if status is pending/failed OR sending claim has gone stale
                 const claimed = await appointmentModel.findOneAndUpdate(
-                    { _id: appt._id, reminderSent24h: { $ne: true } },
-                    { $set: { reminderSent24h: true } }
+                    {
+                        _id: appt._id,
+                        reminder24hStatus: { $ne: 'sent' },
+                        reminderSent24h: { $ne: true },
+                        $or: [
+                            { reminder24hStatus: { $in: ['pending', 'failed'] } },
+                            { reminder24hStatus: 'sending', reminder24hClaimedAt: { $lt: staleThreshold } },
+                            { reminder24hClaimedAt: null },
+                            { reminder24hClaimedAt: { $exists: false } }
+                        ]
+                    },
+                    {
+                        $set: {
+                            reminder24hStatus: 'sending',
+                            reminder24hClaimedAt: new Date()
+                        }
+                    },
+                    { new: true }
                 )
+
                 if (!claimed) continue
 
-                await sendAppointmentReminderEmail({
+                // Attempt email delivery
+                const mailResult = await sendAppointmentReminderEmail({
                     to: userEmail,
                     userName,
                     docName,
@@ -117,7 +180,26 @@ export const checkAndSendReminders = async () => {
                     reminderType: '24-hour'
                 })
 
-                reminders24hSent++
+                if (mailResult && mailResult.sent) {
+                    // Mark as sent ONLY after mailer confirms successful delivery
+                    await appointmentModel.findByIdAndUpdate(appt._id, {
+                        $set: {
+                            reminder24hStatus: 'sent',
+                            reminderSent24h: true,
+                            reminder24hClaimedAt: null
+                        }
+                    })
+                    reminders24hSent++
+                } else {
+                    // If delivery fails, release claim and mark failed so it can be retried
+                    console.log(`[scheduler] 24-hour reminder delivery failed for appointment ${appt._id}. Releasing claim for retry.`)
+                    await appointmentModel.findByIdAndUpdate(appt._id, {
+                        $set: {
+                            reminder24hStatus: 'failed',
+                            reminder24hClaimedAt: null
+                        }
+                    })
+                }
             }
         }
 
@@ -134,6 +216,87 @@ export const checkAndSendReminders = async () => {
 }
 
 /**
+ * Retries un-dispatched payment receipts for verified appointments
+ * using safe pending/failed/stale-sending atomic claiming.
+ */
+export const checkAndRetryReceipts = async () => {
+    try {
+        const staleThreshold = new Date(Date.now() - CLAIM_TIMEOUT_MS)
+
+        const pendingReceipts = await appointmentModel.find({
+            payment: true,
+            cancelled: false,
+            receiptSent: { $ne: true },
+            receiptStatus: { $ne: 'sent' }
+        })
+
+        let receiptsSent = 0
+        for (const appt of pendingReceipts) {
+            const userEmail = appt.userData?.email
+            if (!userEmail) continue
+
+            const claimed = await appointmentModel.findOneAndUpdate(
+                {
+                    _id: appt._id,
+                    receiptStatus: { $ne: 'sent' },
+                    receiptSent: { $ne: true },
+                    $or: [
+                        { receiptStatus: { $in: ['pending', 'failed'] } },
+                        { receiptStatus: 'sending', receiptClaimedAt: { $lt: staleThreshold } },
+                        { receiptClaimedAt: null },
+                        { receiptClaimedAt: { $exists: false } }
+                    ]
+                },
+                {
+                    $set: {
+                        receiptStatus: 'sending',
+                        receiptClaimedAt: new Date()
+                    }
+                },
+                { new: true }
+            )
+
+            if (!claimed) continue
+
+            const mailResult = await sendPaymentReceiptEmail({
+                to: userEmail,
+                userName: appt.userData?.name || 'Patient',
+                docName: appt.docData?.name || 'Doctor',
+                slotDate: appt.slotDate,
+                slotTime: appt.slotTime,
+                amount: appt.amount,
+                paymentMethod: 'Online Payment',
+                transactionId: 'VERIFIED'
+            })
+
+            if (mailResult && mailResult.sent) {
+                await appointmentModel.findByIdAndUpdate(appt._id, {
+                    $set: {
+                        receiptStatus: 'sent',
+                        receiptSent: true,
+                        receiptClaimedAt: null
+                    }
+                })
+                receiptsSent++
+            } else {
+                console.log(`[scheduler] Payment receipt delivery failed for appointment ${appt._id}. Releasing claim for retry.`)
+                await appointmentModel.findByIdAndUpdate(appt._id, {
+                    $set: {
+                        receiptStatus: 'failed',
+                        receiptClaimedAt: null
+                    }
+                })
+            }
+        }
+
+        return { totalPending: pendingReceipts.length, receiptsSent }
+    } catch (error) {
+        console.error('[scheduler] Error in checkAndRetryReceipts:', error.message)
+        return { error: error.message }
+    }
+}
+
+/**
  * Initializes cron schedule to run every 15 minutes.
  */
 export const initReminderScheduler = () => {
@@ -142,6 +305,7 @@ export const initReminderScheduler = () => {
         cron.schedule('*/15 * * * *', async () => {
             console.log('[scheduler] Executing automated appointment reminder cron job...')
             await checkAndSendReminders()
+            await checkAndRetryReceipts()
         })
         console.log('[scheduler] Automated appointment reminder scheduler initialized (every 15 min)')
     } catch (error) {
@@ -150,7 +314,9 @@ export const initReminderScheduler = () => {
 }
 
 export default {
+    CLAIM_TIMEOUT_MS,
     parseAppointmentSlot,
     checkAndSendReminders,
+    checkAndRetryReceipts,
     initReminderScheduler
 }
