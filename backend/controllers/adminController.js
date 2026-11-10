@@ -157,6 +157,7 @@ const addDoctor = async (req, res) => {
             about,
             fees,
             address: JSON.parse(address),
+            isApproved: true,
             date: Date.now()
         }
 
@@ -267,6 +268,30 @@ const deleteDoctor = async (req, res) => {
     }
 }
 
+// API to approve or revoke approval of a doctor
+const approveDoctor = async (req, res) => {
+    try {
+        const { docId, isApproved } = req.body
+        if (!docId) {
+            return res.status(400).json({ success: false, message: 'Doctor ID is required' })
+        }
+        const doctor = await doctorModel.findById(docId)
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: 'Doctor not found' })
+        }
+        const newApprovalStatus = typeof isApproved === 'boolean' ? isApproved : !doctor.isApproved
+        await doctorModel.findByIdAndUpdate(docId, { isApproved: newApprovalStatus })
+        res.json({
+            success: true,
+            message: newApprovalStatus ? 'Doctor approved successfully' : 'Doctor approval revoked successfully',
+            isApproved: newApprovalStatus
+        })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
 export {
     loginAdmin,
     appointmentsAdmin,
@@ -277,5 +302,6 @@ export {
     sendReminders,
     allUsers,
     toggleBlockUser,
-    deleteDoctor
+    deleteDoctor,
+    approveDoctor
 }
