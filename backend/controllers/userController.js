@@ -159,7 +159,7 @@ const updateProfile = async (req, res) => {
 // API to book appointment 
 const bookAppointment = async (req, res) => {
     try {
-        const { userId, docId, slotDate, slotTime } = req.body
+        const { userId, docId, slotDate, slotTime, paymentMode, isCash } = req.body
 
         if (!docId || !slotDate || !slotTime) {
             return res.status(400).json({ success: false, message: 'Missing appointment details' })
@@ -190,6 +190,8 @@ const bookAppointment = async (req, res) => {
             return res.status(404).json({ success: false, message: 'User not found' })
         }
 
+        const isCashAppointment = paymentMode === 'cash' || isCash === true
+
         const appointmentData = {
             userId,
             docId,
@@ -206,7 +208,11 @@ const bookAppointment = async (req, res) => {
             amount: docData.fees,
             slotTime,
             slotDate,
-            date: Date.now()
+            date: Date.now(),
+            payment: false,
+            paymentMode: isCashAppointment ? 'cash' : 'online',
+            isCash: isCashAppointment,
+            paymentMethod: isCashAppointment ? 'cash' : null
         }
 
         // Creating appointment: partial unique index protects against concurrent double-booking
@@ -378,6 +384,10 @@ const paymentRazorpay = async (req, res) => {
 
         // creation of an order
         const order = await razorpayInstance.orders.create(options)
+
+        // Persist generated orderId to the appointment record (Phase 4 Task 4.1)
+        await appointmentModel.findByIdAndUpdate(appointmentId, { orderId: order.id })
+
         res.json({ success: true, order })
 
     } catch (error) {
@@ -391,8 +401,8 @@ const verifyRazorpay = async (req, res) => {
     try {
         const { razorpay_order_id, razorpay_payment_id, razorpay_signature, userId } = req.body
 
-        if (!razorpay_order_id) {
-            return res.status(400).json({ success: false, message: 'Order ID is required' })
+        if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+            return res.status(400).json({ success: false, message: 'Order ID, payment ID, and signature are required' })
         }
 
         const orderInfo = await razorpayInstance.orders.fetch(razorpay_order_id)
@@ -410,23 +420,107 @@ const verifyRazorpay = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Unauthorized action' })
         }
 
-        // cryptographic signature validation
-        if (razorpay_payment_id && razorpay_signature && process.env.RAZORPAY_KEY_SECRET) {
-            const expectedSignature = crypto
-                .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-                .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-                .digest('hex')
+        if (appointment.cancelled) {
+            return res.status(400).json({ success: false, message: 'Appointment is cancelled' })
+        }
 
-            if (expectedSignature !== razorpay_signature) {
-                return res.status(400).json({ success: false, message: 'Invalid payment signature' })
+        // Confirm payment belongs to expected order for this appointment
+        if (appointment.orderId && appointment.orderId !== razorpay_order_id) {
+            return res.status(400).json({ success: false, message: 'Order ID mismatch for this appointment' })
+        }
+
+        // Cryptographic signature validation
+        if (!process.env.RAZORPAY_KEY_SECRET) {
+            return res.status(500).json({ success: false, message: 'Razorpay secret key not configured' })
+        }
+        const expectedSignature = crypto
+            .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+            .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+            .digest('hex')
+
+        if (expectedSignature !== razorpay_signature) {
+            return res.status(400).json({ success: false, message: 'Invalid payment signature' })
+        }
+
+        // Fetch payment details from Razorpay to verify capture status and order binding
+        let paymentInfo
+        try {
+            paymentInfo = await razorpayInstance.payments.fetch(razorpay_payment_id)
+        } catch (fetchErr) {
+            console.error('[verifyRazorpay] Payment fetch error:', fetchErr.message)
+            return res.status(400).json({ success: false, message: 'Unable to verify payment status with gateway' })
+        }
+
+        if (!paymentInfo) {
+            return res.status(400).json({ success: false, message: 'Payment record not found on Razorpay' })
+        }
+
+        // Confirm payment is linked to the expected order
+        if (paymentInfo.order_id && paymentInfo.order_id !== razorpay_order_id) {
+            return res.status(400).json({ success: false, message: 'Payment does not belong to the expected order' })
+        }
+
+        // Verify status is captured/paid
+        if (paymentInfo.status !== 'captured' && orderInfo.status !== 'paid') {
+            return res.status(400).json({ success: false, message: 'Payment is not captured or completed' })
+        }
+
+        // Validate amount and currency
+        const expectedCurrency = (process.env.CURRENCY || 'INR').toUpperCase()
+        const expectedAmountMinor = Math.round(Number(appointment.amount) * 100)
+
+        const orderCurrency = (orderInfo.currency || '').toUpperCase()
+        const paymentCurrency = (paymentInfo.currency || orderCurrency).toUpperCase()
+
+        if (paymentCurrency !== expectedCurrency) {
+            return res.status(400).json({ success: false, message: 'Payment currency mismatch' })
+        }
+
+        const verifiedAmount = paymentInfo.amount || orderInfo.amount_paid || orderInfo.amount
+        if (verifiedAmount !== expectedAmountMinor) {
+            return res.status(400).json({ success: false, message: 'Payment amount mismatch' })
+        }
+
+        // Idempotency: if already paid with this exact paymentId
+        if (appointment.payment === true) {
+            if (appointment.paymentId === razorpay_payment_id) {
+                return res.json({ success: true, message: 'Payment already verified' })
+            }
+            if (appointment.paymentId && appointment.paymentId !== razorpay_payment_id) {
+                return res.status(409).json({ success: false, message: 'Conflicting payment detected for this appointment' })
             }
         }
 
-        if (orderInfo.status === 'paid') {
-            // Ensure payment is recorded in the database
-            await appointmentModel.findByIdAndUpdate(orderInfo.receipt, { payment: true })
+        // Atomic update: ensure appointment is marked paid only once and prevent conflicting payments
+        const capturedAt = paymentInfo.created_at ? new Date(paymentInfo.created_at * 1000) : new Date()
 
-            // Safe claim pattern: transitions pending/failed or stale-sending to sending
+        const updatedAppointment = await appointmentModel.findOneAndUpdate(
+            {
+                _id: appointment._id,
+                $or: [
+                    { payment: { $ne: true } },
+                    { paymentId: razorpay_payment_id }
+                ]
+            },
+            {
+                $set: {
+                    payment: true,
+                    paymentMethod: 'razorpay',
+                    paymentId: razorpay_payment_id,
+                    orderId: razorpay_order_id,
+                    paymentCurrency: paymentCurrency,
+                    paymentAmountMinor: verifiedAmount,
+                    paymentCapturedAt: capturedAt
+                }
+            },
+            { new: true }
+        )
+
+        if (!updatedAppointment) {
+            return res.status(409).json({ success: false, message: 'Conflicting payment detected for this appointment' })
+        }
+
+        // Safe claim pattern: transitions pending/failed or stale-sending to sending
             const STALE_TIMEOUT_MS = 5 * 60 * 1000
             const staleThreshold = new Date(Date.now() - STALE_TIMEOUT_MS)
 
@@ -492,9 +586,6 @@ const verifyRazorpay = async (req, res) => {
             }
 
             res.json({ success: true, message: "Payment Successful" })
-        } else {
-            res.status(400).json({ success: false, message: 'Payment Failed or incomplete' })
-        }
     } catch (error) {
         console.log(error)
         res.status(500).json({ success: false, message: error.message })
@@ -549,6 +640,12 @@ const paymentStripe = async (req, res) => {
             }
         })
 
+        // Persist Checkout session ID against the appointment record (Phase 4 Task 4.1)
+        await appointmentModel.findByIdAndUpdate(appointmentId, {
+            checkoutSessionId: session.id,
+            orderId: session.id
+        })
+
         res.json({ success: true, session_url: session.url })
 
     } catch (error) {
@@ -579,15 +676,21 @@ const verifyStripe = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Unauthorized action' })
         }
 
-        // Idempotency: if already paid, return early without re-triggering side effects
-        if (appointmentData.payment) {
-            return res.json({ success: true, message: 'Appointment already paid' })
+        if (appointmentData.cancelled) {
+            return res.status(400).json({ success: false, message: 'Appointment is cancelled' })
         }
 
-        // Server-side verification directly via Stripe API
+        // Validate session ID if recorded on appointment
+        if (appointmentData.checkoutSessionId && appointmentData.checkoutSessionId !== session_id.trim()) {
+            return res.status(400).json({ success: false, message: 'Stripe session ID does not match this appointment' })
+        }
+
+        // Server-side verification directly via Stripe API with payment_intent expanded
         let session
         try {
-            session = await stripeInstance.checkout.sessions.retrieve(session_id.trim())
+            session = await stripeInstance.checkout.sessions.retrieve(session_id.trim(), {
+                expand: ['payment_intent']
+            })
         } catch (stripeError) {
             console.error('[verifyStripe] Stripe retrieval error:', stripeError.message)
             return res.status(400).json({ success: false, message: 'Invalid Stripe session ID or retrieval failed' })
@@ -622,15 +725,68 @@ const verifyStripe = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Payment currency mismatch' })
         }
 
+        // Extract and verify the actual PaymentIntent
+        let paymentIntent = session.payment_intent
+        let paymentIntentId = null
+        if (typeof paymentIntent === 'string') {
+            paymentIntentId = paymentIntent
+            try {
+                paymentIntent = await stripeInstance.paymentIntents.retrieve(paymentIntentId)
+            } catch (piErr) {
+                console.error('[verifyStripe] PaymentIntent retrieval error:', piErr.message)
+                return res.status(400).json({ success: false, message: 'Failed to verify Stripe PaymentIntent' })
+            }
+        } else if (paymentIntent && typeof paymentIntent === 'object') {
+            paymentIntentId = paymentIntent.id
+        }
+
+        // Do not mark a Stripe payment successful if the PaymentIntent identifier is missing or payment not confirmed
+        if (!paymentIntentId || !paymentIntent) {
+            return res.status(400).json({ success: false, message: 'Stripe PaymentIntent is missing' })
+        }
+
+        if (paymentIntent.status !== 'succeeded') {
+            return res.status(400).json({ success: false, message: `Stripe PaymentIntent is ${paymentIntent.status}, expected succeeded` })
+        }
+
+        // Idempotency: check if already paid
+        if (appointmentData.payment === true) {
+            if (appointmentData.paymentId === paymentIntentId) {
+                return res.json({ success: true, message: 'Appointment already paid' })
+            }
+            if (appointmentData.paymentId && appointmentData.paymentId !== paymentIntentId) {
+                return res.status(409).json({ success: false, message: 'Conflicting payment detected for this appointment' })
+            }
+        }
+
         // Atomic update: ensure appointment is marked paid only once (concurrency protection)
+        const capturedAt = paymentIntent.created ? new Date(paymentIntent.created * 1000) : new Date()
+
         const updatedAppointment = await appointmentModel.findOneAndUpdate(
-            { _id: appointmentId, payment: { $ne: true } },
-            { $set: { payment: true } },
+            {
+                _id: appointmentId,
+                $or: [
+                    { payment: { $ne: true } },
+                    { paymentId: paymentIntentId }
+                ]
+            },
+            {
+                $set: {
+                    payment: true,
+                    paymentMethod: 'stripe',
+                    paymentId: paymentIntentId,
+                    checkoutSessionId: session.id,
+                    orderId: session.id,
+                    paymentCurrency: session.currency.toUpperCase(),
+                    paymentAmountMinor: session.amount_total,
+                    paymentCapturedAt: capturedAt
+                }
+            },
             { new: true }
         )
 
         if (!updatedAppointment) {
-            return res.json({ success: true, message: 'Appointment already paid' })
+            return res.status(409).json({ success: false, message: 'Conflicting payment detected for this appointment' })
         }
 
         // Safe claim pattern: transitions pending/failed or stale-sending to sending
