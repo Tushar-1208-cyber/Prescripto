@@ -92,6 +92,10 @@ const loginUser = async (req, res) => {
             return res.status(401).json({ success: false, message: "Invalid credentials" })
         }
 
+        if (user.isBlocked) {
+            return res.status(403).json({ success: false, message: "Your account has been suspended. Please contact support." })
+        }
+
         const isMatch = await bcrypt.compare(password, user.password)
         if (isMatch) {
             const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' })
@@ -164,6 +168,10 @@ const bookAppointment = async (req, res) => {
         const docData = await doctorModel.findById(docId).select("-password")
         if (!docData) {
             return res.status(404).json({ success: false, message: 'Doctor not found' })
+        }
+
+        if (docData.isApproved === false) {
+            return res.status(400).json({ success: false, message: 'Doctor is not approved for bookings' })
         }
 
         if (!docData.available) {
