@@ -256,10 +256,12 @@ io.on("connection", (socket) => {
 
             if (appointmentId && videoRooms.has(appointmentId)) {
                 const roomParticipants = videoRooms.get(appointmentId)
+                const participantData = roomParticipants.get(socket.id)
+                const senderName = participantData ? participantData.name : (decoded ? decoded.name : 'Participant')
                 roomParticipants.delete(socket.id)
                 socket.leave(`video_${appointmentId}`)
-                socket.to(`video_${appointmentId}`).emit("peer_left", {
-                    message: `${decoded ? decoded.name : 'Participant'} has left the call`
+                io.to(`video_${appointmentId}`).emit("peer_left", {
+                    message: `${senderName} has left the call`
                 })
 
                 if (roomParticipants.size === 0) {
@@ -277,10 +279,11 @@ io.on("connection", (socket) => {
             if (apptId && videoRooms.has(apptId)) {
                 const roomParticipants = videoRooms.get(apptId)
                 const participantData = roomParticipants.get(socket.id)
+                const senderName = participantData ? participantData.name : 'Participant'
                 roomParticipants.delete(socket.id)
 
-                socket.to(`video_${apptId}`).emit("peer_left", {
-                    message: `${participantData ? participantData.name : 'Participant'} disconnected`
+                io.to(`video_${apptId}`).emit("peer_left", {
+                    message: `${senderName} disconnected`
                 })
 
                 if (roomParticipants.size === 0) {
