@@ -203,18 +203,18 @@ export const getDoctorRecommendations = async (req, res) => {
                 reasons.push(`Experienced in ${docObj.speciality}`)
             }
 
+            if (!availCheck.hasSlots) {
+                reasons.push("Fully booked for the next 7 days")
+            } else {
+                reasons.push("Open slots available this week")
+            }
+
             if (docObj.experience) {
                 reasons.push(`${docObj.experience} clinical experience`)
             }
 
             if (docObj.reviewCount > 0 && docObj.averageRating >= 4.0) {
                 reasons.push(`Highly rated (${docObj.averageRating}★ from ${docObj.reviewCount} patients)`)
-            }
-
-            if (availCheck.hasSlots) {
-                reasons.push("Open slots available this week")
-            } else {
-                reasons.push("Fully booked for the next 7 days")
             }
 
             if (parsedBudget && docObj.fees <= parsedBudget) {
@@ -226,7 +226,7 @@ export const getDoctorRecommendations = async (req, res) => {
                 recommendationScore: Math.round(totalScore * 100) / 100,
                 hasUpcomingSlots: availCheck.hasSlots,
                 isFullyBooked: !availCheck.hasSlots,
-                whyRecommended: reasons.slice(0, 3).join(" • ")
+                whyRecommended: reasons.slice(0, 4).join(" • ")
             }
         })
 
