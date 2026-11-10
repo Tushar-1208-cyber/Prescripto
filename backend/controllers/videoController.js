@@ -38,14 +38,27 @@ export const getIceServers = () => {
 }
 
 /**
- * Validates joining eligibility (status, cancellation, completion, and joining window)
+ * Validates joining eligibility (status, payment, cancellation, completion, and joining window)
  */
-const validateAppointmentEligibility = (appointment) => {
+export const validateAppointmentEligibility = (appointment) => {
     if (appointment.cancelled) {
         return { eligible: false, statusCode: 400, message: "Cannot start video consultation for a cancelled appointment" }
     }
     if (appointment.isCompleted) {
         return { eligible: false, statusCode: 400, message: "Cannot join video consultation for a completed appointment" }
+    }
+
+    // Payment eligibility check:
+    // In Prescripto, appointments can be paid online (payment: true) or designated as cash (isCash: true or paymentMode: 'cash').
+    // Unpaid online appointments must complete online payment before joining video consultation.
+    const isCash = appointment.paymentMode === 'cash' || appointment.isCash === true
+    const isPaid = appointment.payment === true
+    if (!isPaid && !isCash && process.env.ALLOW_UNPAID_VIDEO_CONSULTATION !== 'true') {
+        return {
+            eligible: false,
+            statusCode: 402,
+            message: "Payment required: Please complete online payment before joining video consultation"
+        }
     }
 
     // Time window validation (can be bypassed for testing via VIDEO_DISABLE_TIME_CHECK=true)
@@ -54,26 +67,32 @@ const validateAppointmentEligibility = (appointment) => {
         const slotTime = appointment.slotTime
         const apptDate = parseAppointmentSlot(slotDate, slotTime)
 
-        if (apptDate) {
-            const now = Date.now()
-            const apptTimestamp = apptDate.getTime()
-            const earliestJoin = apptTimestamp - (WINDOW_BEFORE_MINUTES * 60 * 1000)
-            const latestJoin = apptTimestamp + (WINDOW_AFTER_MINUTES * 60 * 1000)
-
-            if (now < earliestJoin) {
-                const minutesLeft = Math.ceil((earliestJoin - now) / (60 * 1000))
-                return {
-                    eligible: false,
-                    statusCode: 400,
-                    message: `Consultation window opens ${WINDOW_BEFORE_MINUTES} minutes before your slot (in approximately ${minutesLeft} minutes)`
-                }
+        if (!apptDate) {
+            return {
+                eligible: false,
+                statusCode: 400,
+                message: "Invalid appointment slot date or time format"
             }
-            if (now > latestJoin) {
-                return {
-                    eligible: false,
-                    statusCode: 400,
-                    message: "The consultation window for this appointment has expired"
-                }
+        }
+
+        const now = Date.now()
+        const apptTimestamp = apptDate.getTime()
+        const earliestJoin = apptTimestamp - (WINDOW_BEFORE_MINUTES * 60 * 1000)
+        const latestJoin = apptTimestamp + (WINDOW_AFTER_MINUTES * 60 * 1000)
+
+        if (now < earliestJoin) {
+            const minutesLeft = Math.ceil((earliestJoin - now) / (60 * 1000))
+            return {
+                eligible: false,
+                statusCode: 400,
+                message: `Consultation window opens ${WINDOW_BEFORE_MINUTES} minutes before your slot (in approximately ${minutesLeft} minutes)`
+            }
+        }
+        if (now > latestJoin) {
+            return {
+                eligible: false,
+                statusCode: 400,
+                message: "The consultation window for this appointment has expired"
             }
         }
     }
@@ -206,5 +225,6 @@ export const getDoctorVideoToken = async (req, res) => {
 export default {
     getPatientVideoToken,
     getDoctorVideoToken,
-    getIceServers
+    getIceServers,
+    validateAppointmentEligibility
 }
