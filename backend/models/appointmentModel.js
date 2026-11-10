@@ -15,6 +15,14 @@ const appointmentSchema = new mongoose.Schema({
     isCash: { type: Boolean, default: false },
     isCompleted: { type: Boolean, default: false },
     refundStatus: { type: String, default: 'none' }, // 'none', 'refunded'
+    // Payment identifier persistence (Phase 4 Task 4.1)
+    paymentMethod: { type: String, enum: ['razorpay', 'stripe', 'cash', null], default: null },
+    paymentId: { type: String, default: null },
+    orderId: { type: String, default: null },
+    checkoutSessionId: { type: String, default: null },
+    paymentCurrency: { type: String, default: null },
+    paymentAmountMinor: { type: Number, default: null },
+    paymentCapturedAt: { type: Date, default: null },
     reminderSent24h: { type: Boolean, default: false },
     reminder24hStatus: { type: String, enum: ['pending', 'sending', 'sent', 'failed'], default: 'pending' },
     reminder24hClaimedAt: { type: Date, default: null },
@@ -46,6 +54,7 @@ appointmentSchema.index(
 appointmentSchema.index({ userId: 1 })
 appointmentSchema.index({ docId: 1 })
 appointmentSchema.index({ slotDate: 1 })
+appointmentSchema.index({ paymentId: 1 }, { sparse: true })
 
 const appointmentModel = mongoose.models.appointment || mongoose.model("appointment", appointmentSchema)
 export default appointmentModel
