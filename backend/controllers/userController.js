@@ -415,14 +415,14 @@ const verifyRazorpay = async (req, res) => {
         }
 
         if (orderInfo.status === 'paid') {
-            const alreadySent = appointment.receiptSent === true
-            await appointmentModel.findByIdAndUpdate(orderInfo.receipt, {
-                payment: true,
-                receiptSent: true
-            })
+            // Atomic reservation: only the first verification call updates receiptSent from non-true to true
+            const claimed = await appointmentModel.findOneAndUpdate(
+                { _id: orderInfo.receipt, receiptSent: { $ne: true } },
+                { $set: { payment: true, receiptSent: true } }
+            )
 
-            // Task 4: Payment Receipt email (duplicate-protected, non-blocking)
-            if (!alreadySent && appointment.userData?.email) {
+            // Task 4: Payment Receipt email (atomic duplicate protection, non-blocking)
+            if (claimed && appointment.userData?.email) {
                 sendPaymentReceiptEmail({
                     to: appointment.userData.email,
                     userName: appointment.userData.name,
@@ -433,6 +433,8 @@ const verifyRazorpay = async (req, res) => {
                     paymentMethod: 'Razorpay',
                     transactionId: razorpay_payment_id || razorpay_order_id
                 }).catch(err => console.log('[mailer] Non-blocking Razorpay receipt email error:', err.message))
+            } else if (!claimed) {
+                await appointmentModel.findByIdAndUpdate(orderInfo.receipt, { payment: true })
             }
 
             res.json({ success: true, message: "Payment Successful" })
@@ -523,14 +525,14 @@ const verifyStripe = async (req, res) => {
         if (session_id) {
             const session = await stripeInstance.checkout.sessions.retrieve(session_id)
             if (session.payment_status === 'paid') {
-                const alreadySent = appointmentData.receiptSent === true
-                await appointmentModel.findByIdAndUpdate(appointmentId, {
-                    payment: true,
-                    receiptSent: true
-                })
+                // Atomic reservation: only the first verification call updates receiptSent from non-true to true
+                const claimed = await appointmentModel.findOneAndUpdate(
+                    { _id: appointmentId, receiptSent: { $ne: true } },
+                    { $set: { payment: true, receiptSent: true } }
+                )
 
-                // Task 4: Payment Receipt email (duplicate-protected, non-blocking)
-                if (!alreadySent && appointmentData.userData?.email) {
+                // Task 4: Payment Receipt email (atomic duplicate protection, non-blocking)
+                if (claimed && appointmentData.userData?.email) {
                     sendPaymentReceiptEmail({
                         to: appointmentData.userData.email,
                         userName: appointmentData.userData.name,
@@ -541,6 +543,8 @@ const verifyStripe = async (req, res) => {
                         paymentMethod: 'Stripe Checkout',
                         transactionId: session_id
                     }).catch(err => console.log('[mailer] Non-blocking Stripe receipt email error:', err.message))
+                } else if (!claimed) {
+                    await appointmentModel.findByIdAndUpdate(appointmentId, { payment: true })
                 }
 
                 return res.json({ success: true, message: 'Payment Successful' })
@@ -551,14 +555,13 @@ const verifyStripe = async (req, res) => {
 
         // Fallback backward compatibility
         if (success === "true" || success === true) {
-            const alreadySent = appointmentData.receiptSent === true
-            await appointmentModel.findByIdAndUpdate(appointmentId, {
-                payment: true,
-                receiptSent: true
-            })
+            const claimed = await appointmentModel.findOneAndUpdate(
+                { _id: appointmentId, receiptSent: { $ne: true } },
+                { $set: { payment: true, receiptSent: true } }
+            )
 
-            // Task 4: Payment Receipt email (duplicate-protected, non-blocking)
-            if (!alreadySent && appointmentData.userData?.email) {
+            // Task 4: Payment Receipt email (atomic duplicate protection, non-blocking)
+            if (claimed && appointmentData.userData?.email) {
                 sendPaymentReceiptEmail({
                     to: appointmentData.userData.email,
                     userName: appointmentData.userData.name,
@@ -569,6 +572,8 @@ const verifyStripe = async (req, res) => {
                     paymentMethod: 'Stripe',
                     transactionId: 'N/A'
                 }).catch(err => console.log('[mailer] Non-blocking Stripe receipt email error:', err.message))
+            } else if (!claimed) {
+                await appointmentModel.findByIdAndUpdate(appointmentId, { payment: true })
             }
 
             return res.json({ success: true, message: 'Payment Successful' })
