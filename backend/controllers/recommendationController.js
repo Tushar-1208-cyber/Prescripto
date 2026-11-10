@@ -92,7 +92,7 @@ export const calculateBudgetScore = (doctorFees, patientBudget) => {
  */
 export const getDoctorRecommendations = async (req, res) => {
     try {
-        const { concern, budget } = req.body || {}
+        const { concern, budget, allowExternalAI = false } = req.body || {}
 
         // Input validation
         if (!concern || typeof concern !== 'string') {
@@ -121,33 +121,36 @@ export const getDoctorRecommendations = async (req, res) => {
             ? Number(budget)
             : null
 
-        // Step 1: Classify concern via AI (with local fallback)
-        const classification = await classifyHealthConcern(trimmedConcern)
+        // Step 1: Classify concern via AI or local privacy fallback
+        const classification = await classifyHealthConcern(trimmedConcern, {
+            allowExternalAI: Boolean(allowExternalAI)
+        })
         const primarySpeciality = classification.matchedSpecialities[0] || 'General physician'
         const secondarySpeciality = classification.matchedSpecialities[1] || null
 
         // Step 2: Query candidate doctors from MongoDB
-        // Only select approved doctors matching the target specialities (or all approved doctors if needed)
+        // Only select approved doctors matching the target specialities
         const targetSpecialities = classification.matchedSpecialities
-        let candidateDoctors = await doctorModel.find({
+        const candidateDoctors = await doctorModel.find({
             isApproved: { $ne: false },
             speciality: { $in: targetSpecialities }
         }).select('-password -email')
 
-        // Fallback: If no doctors in matched specialities, search general physicians
-        if (candidateDoctors.length === 0 && !targetSpecialities.includes('General physician')) {
-            candidateDoctors = await doctorModel.find({
-                isApproved: { $ne: false },
-                speciality: 'General physician'
-            }).select('-password -email')
-        }
-
-        // If database has 0 eligible doctors matching criteria
+        // If database has 0 eligible doctors matching the target specialities, return honest empty state
+        // Do NOT silently fall back to unrelated General Physicians
         if (candidateDoctors.length === 0) {
             return res.json({
                 success: true,
-                classification,
+                classification: {
+                    matchedSpecialities: classification.matchedSpecialities,
+                    explanation: classification.explanation,
+                    isVague: classification.isVague,
+                    isEmergency: classification.isEmergency,
+                    urgencyMessage: classification.urgencyMessage,
+                    source: classification.source
+                },
                 recommendedDoctors: [],
+                totalFound: 0,
                 message: "No doctors currently match your criteria. Please check back later or browse all doctors."
             })
         }
@@ -165,12 +168,13 @@ export const getDoctorRecommendations = async (req, res) => {
             }
 
             // Factor 2: Platform & Slot Availability (20%)
+            // Fully booked doctors (no slots in next 7 days) receive 0.0 availability score
             const availCheck = checkDoctorUpcomingAvailability(docObj)
             let availScore = 0.0
             if (docObj.available !== false && availCheck.hasSlots) {
                 availScore = 1.0
-            } else if (docObj.available !== false) {
-                availScore = 0.5
+            } else {
+                availScore = 0.0
             }
 
             // Factor 3: Patient Rating (20%)
@@ -209,6 +213,8 @@ export const getDoctorRecommendations = async (req, res) => {
 
             if (availCheck.hasSlots) {
                 reasons.push("Open slots available this week")
+            } else {
+                reasons.push("Fully booked for the next 7 days")
             }
 
             if (parsedBudget && docObj.fees <= parsedBudget) {
@@ -219,6 +225,7 @@ export const getDoctorRecommendations = async (req, res) => {
                 ...docObj,
                 recommendationScore: Math.round(totalScore * 100) / 100,
                 hasUpcomingSlots: availCheck.hasSlots,
+                isFullyBooked: !availCheck.hasSlots,
                 whyRecommended: reasons.slice(0, 3).join(" • ")
             }
         })
