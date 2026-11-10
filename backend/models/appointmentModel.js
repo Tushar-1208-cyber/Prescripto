@@ -14,8 +14,14 @@ const appointmentSchema = new mongoose.Schema({
     isCompleted: { type: Boolean, default: false },
     refundStatus: { type: String, default: 'none' }, // 'none', 'refunded'
     reminderSent24h: { type: Boolean, default: false },
+    reminder24hStatus: { type: String, enum: ['pending', 'sending', 'sent', 'failed'], default: 'pending' },
+    reminder24hClaimedAt: { type: Date, default: null },
     reminderSent1h: { type: Boolean, default: false },
+    reminder1hStatus: { type: String, enum: ['pending', 'sending', 'sent', 'failed'], default: 'pending' },
+    reminder1hClaimedAt: { type: Date, default: null },
     receiptSent: { type: Boolean, default: false },
+    receiptStatus: { type: String, enum: ['pending', 'sending', 'sent', 'failed'], default: 'pending' },
+    receiptClaimedAt: { type: Date, default: null },
     prescription: {
         diagnosis: { type: String, default: '' },
         notes: { type: String, default: '' },
