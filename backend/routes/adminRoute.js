@@ -9,7 +9,8 @@ import {
     sendReminders,
     allUsers,
     toggleBlockUser,
-    deleteDoctor
+    deleteDoctor,
+    approveDoctor
 } from '../controllers/adminController.js';
 import { changeAvailablity } from '../controllers/doctorController.js';
 import authAdmin from '../middleware/authAdmin.js';
@@ -28,5 +29,6 @@ adminRouter.post("/send-reminders", authAdmin, sendReminders)
 adminRouter.get("/all-users", authAdmin, allUsers)
 adminRouter.post("/toggle-block-user", authAdmin, toggleBlockUser)
 adminRouter.post("/delete-doctor", authAdmin, deleteDoctor)
+adminRouter.post("/approve-doctor", authAdmin, approveDoctor)
 
 export default adminRouter;
