@@ -28,7 +28,7 @@ const registerConnectionListeners = () => {
  * Resolves normalized MongoDB URI with prescripto database name.
  */
 export const resolveMongoUri = (rawUri = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017") => {
-    let uri = rawUri;
+    let uri = (rawUri || "mongodb://127.0.0.1:27017").replace(/^["']|["']$/g, '').trim();
     if (!uri.includes("prescripto")) {
         if (uri.includes("?")) {
             const parts = uri.split("?");
