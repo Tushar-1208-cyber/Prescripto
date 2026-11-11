@@ -17,6 +17,7 @@ import {
     sendPaymentReceiptEmail,
     sendPasswordResetOtpEmail
 } from "../config/mailer.js";
+import { processRefund } from "../services/refundService.js";
 
 // Gateway Initialize
 const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY)
@@ -277,17 +278,45 @@ const cancelAppointment = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Unauthorized action' })
         }
 
+        if (appointmentData.isCompleted) {
+            return res.status(400).json({ success: false, message: 'Cannot cancel an already completed appointment' })
+        }
+
         if (appointmentData.cancelled) {
             return res.status(400).json({ success: false, message: 'Appointment is already cancelled' })
         }
 
-        const wasPaid = appointmentData.payment
-        const updatePayload = { cancelled: true }
-        if (wasPaid) {
-            updatePayload.refundStatus = 'refunded'
-        }
+        const isEligibleRefund = Boolean(
+            appointmentData.payment &&
+            !appointmentData.isCash &&
+            appointmentData.paymentMode !== 'cash' &&
+            appointmentData.paymentMethod !== 'cash'
+        )
 
-        await appointmentModel.findByIdAndUpdate(appointmentId, updatePayload)
+        // Atomic conditional cancellation: prevents concurrent duplicate cancellations
+        const cancelledAppointment = await appointmentModel.findOneAndUpdate(
+            {
+                _id: appointmentId,
+                userId: userId.toString(),
+                cancelled: false,
+                isCompleted: { $ne: true }
+            },
+            {
+                $set: {
+                    cancelled: true,
+                    ...(!isEligibleRefund ? { refundStatus: 'not_applicable' } : {})
+                }
+            },
+            { new: true }
+        )
+
+        if (!cancelledAppointment) {
+            const current = await appointmentModel.findById(appointmentId)
+            if (current?.isCompleted) {
+                return res.status(400).json({ success: false, message: 'Cannot cancel an already completed appointment' })
+            }
+            return res.status(400).json({ success: false, message: 'Appointment is already cancelled' })
+        }
 
         // releasing doctor slot 
         const { docId, slotDate, slotTime } = appointmentData
@@ -299,8 +328,43 @@ const cancelAppointment = async (req, res) => {
             await doctorModel.findByIdAndUpdate(docId, { slots_booked })
         }
 
+        // Trigger isolated dedicated refund service for eligible online payments
+        let refundResult = null
+        if (isEligibleRefund) {
+            try {
+                refundResult = await processRefund(appointmentId)
+            } catch (refundErr) {
+                console.error('[cancelAppointment] Refund processing error:', refundErr.message)
+                refundResult = { success: false, status: 'failed', error: refundErr.message }
+            }
+        }
+
+        // Determine accurate status-specific messaging
+        let refundNote = ''
+        let responseMessage = 'Appointment Cancelled'
+        let finalRefundStatus = isEligibleRefund ? 'failed' : 'not_applicable'
+
+        if (isEligibleRefund && refundResult) {
+            if (refundResult.status === 'refunded') {
+                refundNote = 'Fee has been refunded successfully.'
+                responseMessage = 'Appointment Cancelled. Fee refund successfully processed.'
+                finalRefundStatus = 'refunded'
+            } else if (refundResult.status === 'pending') {
+                refundNote = 'Fee refund has been initiated and is pending provider settlement.'
+                responseMessage = 'Appointment Cancelled. Fee refund is pending provider settlement.'
+                finalRefundStatus = 'pending'
+            } else if (refundResult.status === 'ambiguous_timeout' || refundResult.status === 'temporary_outage') {
+                refundNote = 'Fee refund request is pending verification with the payment provider.'
+                responseMessage = 'Appointment Cancelled. Fee refund is pending provider reconciliation.'
+                finalRefundStatus = 'pending'
+            } else {
+                refundNote = 'Automated refund could not be processed. Our administrative team will review and process your refund manually.'
+                responseMessage = 'Appointment Cancelled. Automated fee refund failed and has been flagged for manual review.'
+                finalRefundStatus = 'failed'
+            }
+        }
+
         // Task 3: Send cancellation email to patient (non-blocking)
-        const refundNote = wasPaid ? 'Fee refund has been automatically initiated.' : ''
         sendAppointmentCancellationEmail({
             to: appointmentData.userData?.email,
             recipientName: appointmentData.userData?.name,
@@ -325,11 +389,11 @@ const cancelAppointment = async (req, res) => {
             }).catch(err => console.log('[mailer] Non-blocking doctor cancellation email error:', err.message))
         }
 
-        res.json({
+        return res.json({
             success: true,
-            message: wasPaid
-                ? 'Appointment Cancelled. Fee refund has been automatically initiated.'
-                : 'Appointment Cancelled'
+            message: responseMessage,
+            refundStatus: finalRefundStatus,
+            ...(refundResult?.refundId ? { refundId: refundResult.refundId } : {})
         })
 
     } catch (error) {
