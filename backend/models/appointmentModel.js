@@ -14,7 +14,22 @@ const appointmentSchema = new mongoose.Schema({
     paymentMode: { type: String, enum: ['online', 'cash'], default: 'online' },
     isCash: { type: Boolean, default: false },
     isCompleted: { type: Boolean, default: false },
-    refundStatus: { type: String, default: 'none' }, // 'none', 'refunded'
+    refundStatus: {
+        type: String,
+        enum: ['none', 'not_applicable', 'pending', 'processing', 'refunded', 'failed'],
+        default: 'none'
+    },
+    // Refund Lifecycle Fields (Phase 4 Task 4.2)
+    refundId: { type: String, default: null },
+    refundAmount: { type: Number, default: null },
+    refundAmountMinor: { type: Number, default: null },
+    refundCurrency: { type: String, default: null },
+    refundedAt: { type: Date, default: null },
+    refundClaimedAt: { type: Date, default: null },
+    refundFailureReason: { type: String, default: null },
+    refundAttempts: { type: Number, default: 0 },
+    refundIdempotencyKey: { type: String, default: null },
+    refundProviderStatus: { type: String, default: null },
     // Payment identifier persistence (Phase 4 Task 4.1)
     paymentMethod: { type: String, enum: ['razorpay', 'stripe', 'cash', null], default: null },
     paymentId: { type: String, default: null },
@@ -55,6 +70,7 @@ appointmentSchema.index({ userId: 1 })
 appointmentSchema.index({ docId: 1 })
 appointmentSchema.index({ slotDate: 1 })
 appointmentSchema.index({ paymentId: 1 }, { sparse: true })
+appointmentSchema.index({ refundId: 1 }, { sparse: true })
 
 const appointmentModel = mongoose.models.appointment || mongoose.model("appointment", appointmentSchema)
 export default appointmentModel
