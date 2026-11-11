@@ -260,17 +260,33 @@ const appointmentComplete = async (req, res) => {
 
         const { docId, appointmentId } = req.body
 
-        const appointmentData = await appointmentModel.findById(appointmentId)
-        if (appointmentData && appointmentData.docId === docId) {
-            await appointmentModel.findByIdAndUpdate(appointmentId, { isCompleted: true })
-            return res.json({ success: true, message: 'Appointment Completed' })
+        if (!appointmentId) {
+            return res.status(400).json({ success: false, message: 'Missing appointment ID' })
         }
 
-        res.json({ success: false, message: 'Appointment Cancelled' })
+        const appointmentData = await appointmentModel.findById(appointmentId)
+        if (!appointmentData) {
+            return res.status(404).json({ success: false, message: 'Appointment not found' })
+        }
+
+        if (appointmentData.docId.toString() !== docId.toString()) {
+            return res.status(403).json({ success: false, message: 'Unauthorized action' })
+        }
+
+        if (appointmentData.cancelled) {
+            return res.status(400).json({ success: false, message: 'Cannot complete a cancelled appointment' })
+        }
+
+        if (appointmentData.isCompleted) {
+            return res.json({ success: true, message: 'Appointment already completed' })
+        }
+
+        await appointmentModel.findByIdAndUpdate(appointmentId, { isCompleted: true })
+        return res.json({ success: true, message: 'Appointment Completed' })
 
     } catch (error) {
         console.log(error)
-        res.json({ success: false, message: error.message })
+        res.status(500).json({ success: false, message: error.message })
     }
 
 }
@@ -348,7 +364,7 @@ const doctorDashboard = async (req, res) => {
         let earnings = 0
 
         appointments.map((item) => {
-            if (item.isCompleted || item.payment) {
+            if (!item.cancelled && (item.isCompleted || item.payment)) {
                 earnings += item.amount
             }
         })
@@ -409,6 +425,10 @@ const addPrescription = async (req, res) => {
 
         if (appointment.docId.toString() !== docId.toString()) {
             return res.status(403).json({ success: false, message: 'Unauthorized action' })
+        }
+
+        if (appointment.cancelled) {
+            return res.status(400).json({ success: false, message: 'Cannot add prescription to a cancelled appointment' })
         }
 
         const prescriptionData = {
