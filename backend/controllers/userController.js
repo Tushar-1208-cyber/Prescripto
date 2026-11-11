@@ -138,7 +138,16 @@ const updateProfile = async (req, res) => {
             return res.json({ success: false, message: "Data Missing" })
         }
 
-        await userModel.findByIdAndUpdate(userId, { name, phone, address: JSON.parse(address), dob, gender })
+        let parsedAddress = {}
+        if (address) {
+            try {
+                parsedAddress = typeof address === 'string' ? JSON.parse(address) : address
+            } catch {
+                parsedAddress = {}
+            }
+        }
+
+        await userModel.findByIdAndUpdate(userId, { name, phone, address: parsedAddress, dob, gender })
 
         if (imageFile) {
 
