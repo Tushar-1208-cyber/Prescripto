@@ -355,6 +355,14 @@ export const reconcilePendingRefunds = async (options = {}) => {
                 // Step 2: Only if explicitly confirmed no matching refund exists on provider, initiate processRefund
                 if (reconResult.status === 'no_refund_found') {
                     console.log(`[scheduler] No provider refund found for ${appt._id}. Initiating processRefund.`)
+                    // Ensure status is pending and claims cleared so processRefund acquires lock
+                    await appointmentModel.findByIdAndUpdate(appt._id, {
+                        $set: {
+                            refundStatus: 'pending',
+                            refundClaimedAt: null,
+                            refundClaimToken: null
+                        }
+                    })
                     const refundResult = await processRefund(appt._id, options)
                     if (refundResult.status === 'refunded' || refundResult.status === 'pending') {
                         initiatedCount++
