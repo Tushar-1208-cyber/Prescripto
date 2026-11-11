@@ -2,46 +2,69 @@ version: '3.8'
 
 services:
   mongodb:
-    image: mongo:latest
+    image: mongo:6
     container_name: prescripto_mongodb
     restart: always
-    ports:
-      - "27017:27017"
+    expose:
+      - "27017"
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --eval 'db.adminCommand(\"ping\")' || mongo --eval 'db.adminCommand(\"ping\")'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   backend:
     build:
       context: ./backend
+      dockerfile: Dockerfile
     container_name: prescripto_backend
     restart: always
     ports:
       - "4000:4000"
     environment:
+      - NODE_ENV=production
       - PORT=4000
-      - MONGODB_URI=mongodb://mongodb:27017
+      - MONGODB_URI=mongodb://mongodb:27017/prescripto
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   frontend:
     build:
       context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_BACKEND_URL=http://localhost:4000
     container_name: prescripto_frontend
     restart: always
     ports:
-      - "5173:5173"
+      - "5173:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
   admin:
     build:
       context: ./admin
+      dockerfile: Dockerfile
+      args:
+        - VITE_BACKEND_URL=http://localhost:4000
     container_name: prescripto_admin
     restart: always
     ports:
-      - "5174:5174"
+      - "5174:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   mongo_data:
