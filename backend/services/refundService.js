@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import crypto from "crypto";
 import stripe from "stripe";
 import razorpay from "razorpay";
 import appointmentModel from "../models/appointmentModel.js";
@@ -12,35 +13,108 @@ let razorpayInstance = (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_
     })
     : null;
 
+// Default authenticated HTTP requester for Razorpay (sends X-Refund-Idempotency)
+let razorpayHttpRequester = null;
+
 /**
  * Dependency injection helper for tests to supply mock gateway clients
  * without hitting live production APIs or requiring network access.
  */
-export const setRefundGatewayClients = ({ stripe: mockStripe, razorpay: mockRazorpay }) => {
+export const setRefundGatewayClients = ({ stripe: mockStripe, razorpay: mockRazorpay, razorpayHttpRequester: mockHttp }) => {
     if (mockStripe !== undefined) stripeInstance = mockStripe;
     if (mockRazorpay !== undefined) razorpayInstance = mockRazorpay;
+    if (mockHttp !== undefined) razorpayHttpRequester = mockHttp;
 };
 
 /**
- * Helper to safely update database with fallback protection.
- * Distinguishes case where provider succeeded but DB update failed.
+ * Direct authenticated HTTP request to Razorpay REST API
+ * Guarantees propagation of X-Refund-Idempotency header which the official SDK strips.
  */
-const safeDbUpdate = async (appointmentId, updatePayload) => {
+const defaultRazorpayRequest = async ({ path, method = 'POST', data = null, headers = {} }) => {
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+    if (!keyId || !keySecret) {
+        throw new Error('Razorpay credentials not configured');
+    }
+
+    const authHeader = 'Basic ' + Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+    const url = `https://api.razorpay.com/v1${path}`;
+
+    const requestHeaders = {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        ...headers
+    };
+
+    const fetchOptions = {
+        method,
+        headers: requestHeaders
+    };
+
+    if (data && ['POST', 'PUT', 'PATCH'].includes(method.toUpperCase())) {
+        fetchOptions.body = JSON.stringify(data);
+    }
+
+    const res = await fetch(url, fetchOptions);
+    const body = await res.json().catch(() => null);
+
+    if (!res.ok) {
+        const error = new Error(body?.error?.description || `Razorpay HTTP error: ${res.statusText}`);
+        error.statusCode = res.status;
+        error.error = body?.error || { description: error.message };
+        throw error;
+    }
+
+    return body;
+};
+
+/**
+ * Execute Razorpay HTTP request using active or injected requester
+ */
+const executeRazorpayHttp = async (reqOptions, customRequester) => {
+    const requester = customRequester || razorpayHttpRequester || defaultRazorpayRequest;
+    return await requester(reqOptions);
+};
+
+/**
+ * Helper to safely update database with lock-ownership verification and fallback protection.
+ * If claimToken is passed, verifies worker still owns the lock before modifying state.
+ */
+const safeDbUpdate = async (appointmentId, updatePayload, claimToken = null) => {
+    const query = { _id: appointmentId };
+    if (claimToken) {
+        query.refundClaimToken = claimToken;
+    }
+
     try {
-        const updated = await appointmentModel.findByIdAndUpdate(
-            appointmentId,
+        const updated = await appointmentModel.findOneAndUpdate(
+            query,
             { $set: updatePayload },
             { new: true }
         );
+
+        if (!updated && claimToken) {
+            console.warn(`[refundService] Claim lock for appointment ${appointmentId} was lost or expired (claimToken mismatch). Stale worker aborting update.`);
+            return { success: false, lostLock: true };
+        }
+
         return { success: true, appointment: updated };
     } catch (dbErr) {
         console.error(`[CRITICAL] MongoDB update error for appointment ${appointmentId}:`, dbErr.message);
         // Emergency direct collection update fallback
         try {
-            await appointmentModel.collection.updateOne(
-                { _id: new mongoose.Types.ObjectId(appointmentId) },
+            const fallbackQuery = { _id: new mongoose.Types.ObjectId(appointmentId) };
+            if (claimToken) {
+                fallbackQuery.refundClaimToken = claimToken;
+            }
+            const res = await appointmentModel.collection.updateOne(
+                fallbackQuery,
                 { $set: updatePayload }
             );
+            if (res.matchedCount === 0 && claimToken) {
+                return { success: false, lostLock: true };
+            }
             return { success: true, fallback: true };
         } catch (fallbackErr) {
             console.error(`[CRITICAL] Emergency collection update also failed for appointment ${appointmentId}:`, fallbackErr.message);
@@ -52,7 +126,7 @@ const safeDbUpdate = async (appointmentId, updatePayload) => {
 /**
  * Handle Razorpay refund failure scenarios
  */
-const handleRazorpayFailure = async (appointmentId, claimed, rzpErr, activeRzp) => {
+const handleRazorpayFailure = async (appointmentId, claimed, rzpErr, claimToken, customRequester) => {
     const errMsg = rzpErr.error?.description || rzpErr.message || '';
     const errCode = rzpErr.error?.code || '';
     const statusCode = rzpErr.statusCode || rzpErr.status || 0;
@@ -60,11 +134,15 @@ const handleRazorpayFailure = async (appointmentId, claimed, rzpErr, activeRzp) 
     // 1. Payment already refunded (idempotency safety check)
     const isAlreadyRefunded =
         errMsg.toLowerCase().includes('already') ||
-        errCode === 'BAD_REQUEST_ERROR' && errMsg.toLowerCase().includes('refund');
+        (errCode === 'BAD_REQUEST_ERROR' && errMsg.toLowerCase().includes('refund'));
 
     if (isAlreadyRefunded) {
         try {
-            const existingRefunds = await activeRzp.payments.fetchMultipleRefund(claimed.paymentId);
+            const existingRefunds = await executeRazorpayHttp({
+                path: `/payments/${claimed.paymentId}/refunds`,
+                method: 'GET'
+            }, customRequester);
+
             const latest = existingRefunds?.items?.[0];
             if (latest) {
                 await safeDbUpdate(appointmentId, {
@@ -76,8 +154,10 @@ const handleRazorpayFailure = async (appointmentId, claimed, rzpErr, activeRzp) 
                     refundCurrency: claimed.paymentCurrency,
                     refundedAt: new Date(),
                     refundClaimedAt: null,
+                    refundClaimToken: null,
                     refundFailureReason: null
-                });
+                }, claimToken);
+
                 return {
                     success: true,
                     status: 'refunded',
@@ -103,8 +183,10 @@ const handleRazorpayFailure = async (appointmentId, claimed, rzpErr, activeRzp) 
         await safeDbUpdate(appointmentId, {
             refundStatus: 'pending',
             refundClaimedAt: null,
+            refundClaimToken: null,
             refundFailureReason: `Ambiguous network timeout during Razorpay refund call: ${errMsg}. Reconcile before retrying.`
-        });
+        }, claimToken);
+
         return {
             success: false,
             status: 'ambiguous_timeout',
@@ -119,8 +201,10 @@ const handleRazorpayFailure = async (appointmentId, claimed, rzpErr, activeRzp) 
         await safeDbUpdate(appointmentId, {
             refundStatus: 'pending',
             refundClaimedAt: null,
+            refundClaimToken: null,
             refundFailureReason: `Temporary Razorpay gateway outage (${statusCode}): ${errMsg}. Retryable.`
-        });
+        }, claimToken);
+
         return {
             success: false,
             status: 'temporary_outage',
@@ -133,8 +217,10 @@ const handleRazorpayFailure = async (appointmentId, claimed, rzpErr, activeRzp) 
     await safeDbUpdate(appointmentId, {
         refundStatus: 'failed',
         refundClaimedAt: null,
+        refundClaimToken: null,
         refundFailureReason: errMsg || 'Definitive gateway rejection by Razorpay'
-    });
+    }, claimToken);
+
     return {
         success: false,
         status: 'failed',
@@ -146,7 +232,7 @@ const handleRazorpayFailure = async (appointmentId, claimed, rzpErr, activeRzp) 
 /**
  * Handle Stripe refund failure scenarios
  */
-const handleStripeFailure = async (appointmentId, claimed, stripeErr, activeStripe) => {
+const handleStripeFailure = async (appointmentId, claimed, stripeErr, activeStripe, claimToken) => {
     const errCode = stripeErr.code || '';
     const errType = stripeErr.type || '';
     const errMsg = stripeErr.message || '';
@@ -171,8 +257,10 @@ const handleStripeFailure = async (appointmentId, claimed, stripeErr, activeStri
                     refundCurrency: claimed.paymentCurrency,
                     refundedAt: new Date(),
                     refundClaimedAt: null,
+                    refundClaimToken: null,
                     refundFailureReason: null
-                });
+                }, claimToken);
+
                 return {
                     success: true,
                     status: 'refunded',
@@ -195,8 +283,10 @@ const handleStripeFailure = async (appointmentId, claimed, stripeErr, activeStri
         await safeDbUpdate(appointmentId, {
             refundStatus: 'pending',
             refundClaimedAt: null,
+            refundClaimToken: null,
             refundFailureReason: `Ambiguous network timeout during Stripe call: ${errMsg}. Reconcile before retrying.`
-        });
+        }, claimToken);
+
         return {
             success: false,
             status: 'ambiguous_timeout',
@@ -207,15 +297,17 @@ const handleStripeFailure = async (appointmentId, claimed, stripeErr, activeStri
 
     // 3. Temporary Outage (500, 502, 503)
     const isTemporaryOutage =
-        statusCode >= 500 && statusCode < 600 ||
-        errType === 'StripeAPIError' && statusCode >= 500;
+        (statusCode >= 500 && statusCode < 600) ||
+        (errType === 'StripeAPIError' && statusCode >= 500);
 
     if (isTemporaryOutage) {
         await safeDbUpdate(appointmentId, {
             refundStatus: 'pending',
             refundClaimedAt: null,
+            refundClaimToken: null,
             refundFailureReason: `Temporary Stripe service outage (${statusCode}): ${errMsg}. Retryable.`
-        });
+        }, claimToken);
+
         return {
             success: false,
             status: 'temporary_outage',
@@ -228,14 +320,139 @@ const handleStripeFailure = async (appointmentId, claimed, stripeErr, activeStri
     await safeDbUpdate(appointmentId, {
         refundStatus: 'failed',
         refundClaimedAt: null,
+        refundClaimToken: null,
         refundFailureReason: errMsg || 'Definitive gateway rejection by Stripe'
-    });
+    }, claimToken);
+
     return {
         success: false,
         status: 'failed',
         message: 'Refund rejected by Stripe',
         error: errMsg
     };
+};
+
+/**
+ * Poll or Retrieve Existing Refund
+ *
+ * Mandatory protection against submitting duplicate create-refund requests
+ * when an appointment already possesses a refundId.
+ */
+const pollExistingRefund = async (appointment, options = {}) => {
+    const appointmentId = appointment._id.toString();
+    const activeStripe = options.stripe || stripeInstance;
+    const customHttp = options.razorpayHttpRequester || razorpayHttpRequester;
+
+    // Acquire lock for polling to prevent concurrent status modification
+    const claimToken = crypto.randomUUID();
+    const STALE_TIMEOUT_MS = 5 * 60 * 1000;
+    const staleThreshold = new Date(Date.now() - STALE_TIMEOUT_MS);
+
+    const claimed = await appointmentModel.findOneAndUpdate(
+        {
+            _id: appointment._id,
+            $or: [
+                { refundClaimedAt: null },
+                { refundClaimedAt: { $lt: staleThreshold } }
+            ]
+        },
+        {
+            $set: {
+                refundClaimedAt: new Date(),
+                refundClaimToken: claimToken
+            }
+        },
+        { new: true }
+    );
+
+    if (!claimed) {
+        return {
+            success: false,
+            status: 'concurrency_locked',
+            message: 'Existing refund is currently being verified by another worker'
+        };
+    }
+
+    try {
+        if (appointment.paymentMethod === 'stripe') {
+            if (!activeStripe) throw new Error('Stripe client not configured');
+            const strRefund = await activeStripe.refunds.retrieve(appointment.refundId);
+
+            if (strRefund.status === 'succeeded') {
+                await safeDbUpdate(appointmentId, {
+                    refundStatus: 'refunded',
+                    refundProviderStatus: 'succeeded',
+                    refundedAt: new Date(),
+                    refundClaimedAt: null,
+                    refundClaimToken: null,
+                    refundFailureReason: null
+                }, claimToken);
+                return { success: true, status: 'refunded', refundId: strRefund.id, message: 'Existing refund confirmed succeeded on Stripe' };
+            } else if (strRefund.status === 'pending') {
+                await safeDbUpdate(appointmentId, {
+                    refundStatus: 'pending',
+                    refundProviderStatus: 'pending',
+                    refundClaimedAt: null,
+                    refundClaimToken: null,
+                    refundFailureReason: 'Existing refund still pending with Stripe'
+                }, claimToken);
+                return { success: true, status: 'pending', refundId: strRefund.id, message: 'Existing refund is still pending with Stripe' };
+            } else {
+                await safeDbUpdate(appointmentId, {
+                    refundStatus: 'failed',
+                    refundProviderStatus: strRefund.status,
+                    refundClaimedAt: null,
+                    refundClaimToken: null,
+                    refundFailureReason: strRefund.failure_reason || `Stripe reported status: ${strRefund.status}`
+                }, claimToken);
+                return { success: false, status: 'failed', refundId: strRefund.id, message: `Existing Stripe refund status: ${strRefund.status}` };
+            }
+        }
+
+        if (appointment.paymentMethod === 'razorpay') {
+            const rzpRefund = await executeRazorpayHttp({
+                path: `/refunds/${appointment.refundId}`,
+                method: 'GET'
+            }, customHttp);
+
+            if (rzpRefund.status === 'processed') {
+                await safeDbUpdate(appointmentId, {
+                    refundStatus: 'refunded',
+                    refundProviderStatus: 'processed',
+                    refundedAt: new Date(),
+                    refundClaimedAt: null,
+                    refundClaimToken: null,
+                    refundFailureReason: null
+                }, claimToken);
+                return { success: true, status: 'refunded', refundId: rzpRefund.id, message: 'Existing refund confirmed processed on Razorpay' };
+            } else if (rzpRefund.status === 'pending') {
+                await safeDbUpdate(appointmentId, {
+                    refundStatus: 'pending',
+                    refundProviderStatus: 'pending',
+                    refundClaimedAt: null,
+                    refundClaimToken: null,
+                    refundFailureReason: 'Existing refund still pending with Razorpay'
+                }, claimToken);
+                return { success: true, status: 'pending', refundId: rzpRefund.id, message: 'Existing refund is still pending with Razorpay' };
+            } else {
+                await safeDbUpdate(appointmentId, {
+                    refundStatus: 'failed',
+                    refundProviderStatus: rzpRefund.status,
+                    refundClaimedAt: null,
+                    refundClaimToken: null,
+                    refundFailureReason: `Razorpay reported status: ${rzpRefund.status}`
+                }, claimToken);
+                return { success: false, status: 'failed', refundId: rzpRefund.id, message: `Existing Razorpay refund status: ${rzpRefund.status}` };
+            }
+        }
+
+        await safeDbUpdate(appointmentId, { refundClaimedAt: null, refundClaimToken: null }, claimToken);
+        return { success: false, status: 'unsupported_method', message: 'Unsupported payment method for polling' };
+    } catch (err) {
+        await safeDbUpdate(appointmentId, { refundClaimedAt: null, refundClaimToken: null }, claimToken);
+        console.error(`[refundService] Error polling existing refund ${appointment.refundId}:`, err.message);
+        return { success: false, status: 'polling_error', error: err.message };
+    }
 };
 
 /**
@@ -295,6 +512,13 @@ export const processRefund = async (appointmentId, options = {}) => {
             };
         }
 
+        // PENDING REFUND PROTECTION:
+        // If an appointment already has a refundId, NEVER submit another create-refund request!
+        // Retrieve and poll that exact existing refund with the provider.
+        if (appointment.refundId) {
+            return await pollExistingRefund(appointment, options);
+        }
+
         // Validate paymentMethod
         if (!appointment.paymentMethod || !['razorpay', 'stripe'].includes(appointment.paymentMethod)) {
             await appointmentModel.findByIdAndUpdate(appointmentId, {
@@ -334,15 +558,16 @@ export const processRefund = async (appointmentId, options = {}) => {
             };
         }
 
-        // Active gateway clients (allow injection from options or module state)
-        const activeRazorpay = options.razorpay || razorpayInstance;
+        // Active gateway clients
         const activeStripe = options.stripe || stripeInstance;
+        const customRzpHttp = options.razorpayHttpRequester || razorpayHttpRequester;
 
-        // 2. Atomic concurrency lock via MongoDB findOneAndUpdate
+        // 2. Atomic concurrency lock with unique worker claimToken
         const STALE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes freshness window
         const staleThreshold = new Date(Date.now() - STALE_TIMEOUT_MS);
+        const claimToken = crypto.randomUUID();
 
-        // Derive stable idempotency key (never regenerated on retry)
+        // Derive stable idempotency key (reuses existing key for ambiguous retries)
         const idempotencyKey = appointment.refundIdempotencyKey || `ref_${appointment._id.toString()}`;
 
         const claimQuery = {
@@ -360,6 +585,7 @@ export const processRefund = async (appointmentId, options = {}) => {
             $set: {
                 refundStatus: 'processing',
                 refundClaimedAt: new Date(),
+                refundClaimToken: claimToken,
                 refundIdempotencyKey: idempotencyKey,
                 refundAmountMinor: appointment.paymentAmountMinor,
                 refundCurrency: appointment.paymentCurrency
@@ -385,17 +611,8 @@ export const processRefund = async (appointmentId, options = {}) => {
             };
         }
 
-        // 3. Razorpay Refund Flow
+        // 3. Razorpay Refund Flow (Guaranteed Provider-Level Idempotency)
         if (claimed.paymentMethod === 'razorpay') {
-            if (!activeRazorpay) {
-                await safeDbUpdate(appointmentId, {
-                    refundStatus: 'failed',
-                    refundClaimedAt: null,
-                    refundFailureReason: 'Razorpay client not configured on server'
-                });
-                return { success: false, status: 'failed', message: 'Razorpay gateway not configured' };
-            }
-
             try {
                 const refundPayload = {
                     amount: claimed.paymentAmountMinor,
@@ -407,20 +624,29 @@ export const processRefund = async (appointmentId, options = {}) => {
                     receipt: idempotencyKey
                 };
 
-                const rzpRefund = await activeRazorpay.payments.refund(claimed.paymentId, refundPayload);
+                // Issue authenticated HTTP request with X-Refund-Idempotency header
+                const rzpRefund = await executeRazorpayHttp({
+                    path: `/payments/${claimed.paymentId}/refund`,
+                    method: 'POST',
+                    data: refundPayload,
+                    headers: {
+                        'X-Refund-Idempotency': idempotencyKey
+                    }
+                }, customRzpHttp);
 
                 if (!rzpRefund || !rzpRefund.id) {
                     await safeDbUpdate(appointmentId, {
                         refundStatus: 'failed',
                         refundClaimedAt: null,
+                        refundClaimToken: null,
                         refundFailureReason: 'Razorpay returned empty refund response'
-                    });
+                    }, claimToken);
                     return { success: false, status: 'failed', message: 'Empty refund response from Razorpay' };
                 }
 
                 if (rzpRefund.status === 'processed') {
                     try {
-                        await safeDbUpdate(appointmentId, {
+                        const updateRes = await safeDbUpdate(appointmentId, {
                             refundStatus: 'refunded',
                             refundId: rzpRefund.id,
                             refundProviderStatus: 'processed',
@@ -429,8 +655,19 @@ export const processRefund = async (appointmentId, options = {}) => {
                             refundCurrency: claimed.paymentCurrency,
                             refundedAt: new Date(),
                             refundClaimedAt: null,
+                            refundClaimToken: null,
                             refundFailureReason: null
-                        });
+                        }, claimToken);
+
+                        if (updateRes.lostLock) {
+                            return {
+                                success: false,
+                                status: 'stale_worker_aborted',
+                                refundId: rzpRefund.id,
+                                message: 'Refund was processed by Razorpay but claim lock expired before update could be applied.'
+                            };
+                        }
+
                         return {
                             success: true,
                             status: 'refunded',
@@ -455,8 +692,10 @@ export const processRefund = async (appointmentId, options = {}) => {
                         refundAmountMinor: claimed.paymentAmountMinor,
                         refundCurrency: claimed.paymentCurrency,
                         refundClaimedAt: null,
+                        refundClaimToken: null,
                         refundFailureReason: 'Refund pending settlement by Razorpay'
-                    });
+                    }, claimToken);
+
                     return {
                         success: true,
                         status: 'pending',
@@ -469,8 +708,10 @@ export const processRefund = async (appointmentId, options = {}) => {
                         refundId: rzpRefund.id || null,
                         refundProviderStatus: rzpRefund.status || 'unknown',
                         refundClaimedAt: null,
+                        refundClaimToken: null,
                         refundFailureReason: `Razorpay reported non-successful status: ${rzpRefund.status}`
-                    });
+                    }, claimToken);
+
                     return {
                         success: false,
                         status: 'failed',
@@ -479,7 +720,7 @@ export const processRefund = async (appointmentId, options = {}) => {
                     };
                 }
             } catch (rzpErr) {
-                return await handleRazorpayFailure(appointmentId, claimed, rzpErr, activeRazorpay);
+                return await handleRazorpayFailure(appointmentId, claimed, rzpErr, claimToken, customRzpHttp);
             }
         }
 
@@ -489,8 +730,9 @@ export const processRefund = async (appointmentId, options = {}) => {
                 await safeDbUpdate(appointmentId, {
                     refundStatus: 'failed',
                     refundClaimedAt: null,
+                    refundClaimToken: null,
                     refundFailureReason: 'Stripe client not configured on server'
-                });
+                }, claimToken);
                 return { success: false, status: 'failed', message: 'Stripe gateway not configured' };
             }
 
@@ -511,14 +753,15 @@ export const processRefund = async (appointmentId, options = {}) => {
                     await safeDbUpdate(appointmentId, {
                         refundStatus: 'failed',
                         refundClaimedAt: null,
+                        refundClaimToken: null,
                         refundFailureReason: 'Stripe returned empty refund response'
-                    });
+                    }, claimToken);
                     return { success: false, status: 'failed', message: 'Empty refund response from Stripe' };
                 }
 
                 if (strRefund.status === 'succeeded') {
                     try {
-                        await safeDbUpdate(appointmentId, {
+                        const updateRes = await safeDbUpdate(appointmentId, {
                             refundStatus: 'refunded',
                             refundId: strRefund.id,
                             refundProviderStatus: 'succeeded',
@@ -527,8 +770,19 @@ export const processRefund = async (appointmentId, options = {}) => {
                             refundCurrency: claimed.paymentCurrency,
                             refundedAt: new Date(),
                             refundClaimedAt: null,
+                            refundClaimToken: null,
                             refundFailureReason: null
-                        });
+                        }, claimToken);
+
+                        if (updateRes.lostLock) {
+                            return {
+                                success: false,
+                                status: 'stale_worker_aborted',
+                                refundId: strRefund.id,
+                                message: 'Refund was processed by Stripe but claim lock expired before update could be applied.'
+                            };
+                        }
+
                         return {
                             success: true,
                             status: 'refunded',
@@ -553,8 +807,10 @@ export const processRefund = async (appointmentId, options = {}) => {
                         refundAmountMinor: claimed.paymentAmountMinor,
                         refundCurrency: claimed.paymentCurrency,
                         refundClaimedAt: null,
+                        refundClaimToken: null,
                         refundFailureReason: 'Stripe refund is pending settlement'
-                    });
+                    }, claimToken);
+
                     return {
                         success: true,
                         status: 'pending',
@@ -567,8 +823,10 @@ export const processRefund = async (appointmentId, options = {}) => {
                         refundId: strRefund.id || null,
                         refundProviderStatus: strRefund.status || 'failed',
                         refundClaimedAt: null,
+                        refundClaimToken: null,
                         refundFailureReason: strRefund.failure_reason || `Stripe reported status: ${strRefund.status}`
-                    });
+                    }, claimToken);
+
                     return {
                         success: false,
                         status: 'failed',
@@ -577,7 +835,7 @@ export const processRefund = async (appointmentId, options = {}) => {
                     };
                 }
             } catch (strErr) {
-                return await handleStripeFailure(appointmentId, claimed, strErr, activeStripe);
+                return await handleStripeFailure(appointmentId, claimed, strErr, activeStripe, claimToken);
             }
         }
 
@@ -607,11 +865,42 @@ export const reconcileRefund = async (appointmentId, options = {}) => {
             return { success: false, status: 'not_found', message: 'Appointment not found' };
         }
 
-        const activeRazorpay = options.razorpay || razorpayInstance;
         const activeStripe = options.stripe || stripeInstance;
+        const customRzpHttp = options.razorpayHttpRequester || razorpayHttpRequester;
 
+        // Stripe Reconciliation
         if (appointment.paymentMethod === 'stripe') {
             if (!activeStripe) throw new Error('Stripe client not configured');
+
+            // If appointment already has a specific refundId, verify that exact refund directly
+            if (appointment.refundId) {
+                try {
+                    const exact = await activeStripe.refunds.retrieve(appointment.refundId);
+                    if (exact.status === 'succeeded') {
+                        await safeDbUpdate(appointmentId, {
+                            refundStatus: 'refunded',
+                            refundProviderStatus: 'succeeded',
+                            refundedAt: new Date(),
+                            refundClaimedAt: null,
+                            refundClaimToken: null,
+                            refundFailureReason: null
+                        });
+                        return { success: true, status: 'refunded', refundId: exact.id, message: 'Reconciled: exact refund confirmed succeeded on Stripe' };
+                    } else if (exact.status === 'pending') {
+                        await safeDbUpdate(appointmentId, {
+                            refundStatus: 'pending',
+                            refundProviderStatus: 'pending',
+                            refundClaimedAt: null,
+                            refundClaimToken: null
+                        });
+                        return { success: true, status: 'pending', refundId: exact.id, message: 'Reconciled: exact refund is pending on Stripe' };
+                    }
+                } catch (retrieveErr) {
+                    console.warn(`[reconcileRefund] Stripe retrieve for ${appointment.refundId} failed, falling back to list:`, retrieveErr.message);
+                }
+            }
+
+            // Fallback: list refunds by payment_intent
             const refundsList = await activeStripe.refunds.list({ payment_intent: appointment.paymentId });
             const successful = refundsList.data?.find(r => r.status === 'succeeded');
             const pending = refundsList.data?.find(r => r.status === 'pending');
@@ -623,6 +912,7 @@ export const reconcileRefund = async (appointmentId, options = {}) => {
                     refundProviderStatus: 'succeeded',
                     refundedAt: new Date(),
                     refundClaimedAt: null,
+                    refundClaimToken: null,
                     refundFailureReason: null
                 });
                 return { success: true, status: 'refunded', refundId: successful.id, message: 'Reconciled: refund confirmed on Stripe' };
@@ -631,22 +921,61 @@ export const reconcileRefund = async (appointmentId, options = {}) => {
                     refundStatus: 'pending',
                     refundId: pending.id,
                     refundProviderStatus: 'pending',
-                    refundClaimedAt: null
+                    refundClaimedAt: null,
+                    refundClaimToken: null
                 });
                 return { success: true, status: 'pending', refundId: pending.id, message: 'Reconciled: refund is pending on Stripe' };
             } else {
                 // No refund found on gateway: unlock claim to allow fresh retry
                 await safeDbUpdate(appointmentId, {
                     refundClaimedAt: null,
+                    refundClaimToken: null,
                     refundFailureReason: 'Reconciled: No refund found on Stripe. Ready for retry.'
                 });
                 return { success: true, status: 'no_refund_found', message: 'No refund found on Stripe. Claim released for retry.' };
             }
         }
 
+        // Razorpay Reconciliation
         if (appointment.paymentMethod === 'razorpay') {
-            if (!activeRazorpay) throw new Error('Razorpay client not configured');
-            const refundsList = await activeRazorpay.payments.fetchMultipleRefund(appointment.paymentId);
+            // If appointment already has a specific refundId, verify that exact refund directly
+            if (appointment.refundId) {
+                try {
+                    const exact = await executeRazorpayHttp({
+                        path: `/refunds/${appointment.refundId}`,
+                        method: 'GET'
+                    }, customRzpHttp);
+
+                    if (exact && exact.status === 'processed') {
+                        await safeDbUpdate(appointmentId, {
+                            refundStatus: 'refunded',
+                            refundProviderStatus: 'processed',
+                            refundedAt: new Date(),
+                            refundClaimedAt: null,
+                            refundClaimToken: null,
+                            refundFailureReason: null
+                        });
+                        return { success: true, status: 'refunded', refundId: exact.id, message: 'Reconciled: exact refund confirmed processed on Razorpay' };
+                    } else if (exact && exact.status === 'pending') {
+                        await safeDbUpdate(appointmentId, {
+                            refundStatus: 'pending',
+                            refundProviderStatus: 'pending',
+                            refundClaimedAt: null,
+                            refundClaimToken: null
+                        });
+                        return { success: true, status: 'pending', refundId: exact.id, message: 'Reconciled: exact refund is pending on Razorpay' };
+                    }
+                } catch (retrieveErr) {
+                    console.warn(`[reconcileRefund] Razorpay retrieve for ${appointment.refundId} failed, falling back to list:`, retrieveErr.message);
+                }
+            }
+
+            // Fallback: list refunds by payment_id
+            const refundsList = await executeRazorpayHttp({
+                path: `/payments/${appointment.paymentId}/refunds`,
+                method: 'GET'
+            }, customRzpHttp);
+
             const successful = refundsList?.items?.find(r => r.status === 'processed');
             const pending = refundsList?.items?.find(r => r.status === 'pending');
 
@@ -657,6 +986,7 @@ export const reconcileRefund = async (appointmentId, options = {}) => {
                     refundProviderStatus: 'processed',
                     refundedAt: new Date(),
                     refundClaimedAt: null,
+                    refundClaimToken: null,
                     refundFailureReason: null
                 });
                 return { success: true, status: 'refunded', refundId: successful.id, message: 'Reconciled: refund confirmed on Razorpay' };
@@ -665,12 +995,14 @@ export const reconcileRefund = async (appointmentId, options = {}) => {
                     refundStatus: 'pending',
                     refundId: pending.id,
                     refundProviderStatus: 'pending',
-                    refundClaimedAt: null
+                    refundClaimedAt: null,
+                    refundClaimToken: null
                 });
                 return { success: true, status: 'pending', refundId: pending.id, message: 'Reconciled: refund is pending on Razorpay' };
             } else {
                 await safeDbUpdate(appointmentId, {
                     refundClaimedAt: null,
+                    refundClaimToken: null,
                     refundFailureReason: 'Reconciled: No refund found on Razorpay. Ready for retry.'
                 });
                 return { success: true, status: 'no_refund_found', message: 'No refund found on Razorpay. Claim released for retry.' };
@@ -686,6 +1018,11 @@ export const reconcileRefund = async (appointmentId, options = {}) => {
 
 /**
  * Administrative Safe Retry for Failed Refunds
+ *
+ * Distinguishes:
+ * - Ambiguous timeout: reuses existing idempotency key to prevent double refunds.
+ * - Confirmed terminal failure: reconciles first to confirm no prior refund is active/successful,
+ *   preserves previous attempt in audit trail, and generates an attempt-scoped key.
  */
 export const retryFailedRefund = async (appointmentId, options = {}) => {
     const appointment = await appointmentModel.findById(appointmentId);
@@ -697,12 +1034,41 @@ export const retryFailedRefund = async (appointmentId, options = {}) => {
         return { success: true, status: 'already_refunded', message: 'Appointment is already refunded' };
     }
 
-    // Reset claim and failure status to pending for fresh retry
+    // Step 1: Reconcile with provider first before generating any new attempt key
+    const recon = await reconcileRefund(appointmentId, options);
+    if (recon.status === 'refunded') {
+        return { success: true, status: 'refunded', refundId: recon.refundId, message: 'Refund was already completed on gateway' };
+    }
+    if (recon.status === 'pending') {
+        return { success: true, status: 'pending', refundId: recon.refundId, message: 'Refund is currently pending settlement on gateway' };
+    }
+
+    // Step 2: Confirmed failure handling
+    // Audit trail: archive previous failed attempt
+    const newAttemptNumber = (appointment.refundAttempts || 0) + 1;
+    const historyEntry = {
+        attempt: appointment.refundAttempts || 1,
+        idempotencyKey: appointment.refundIdempotencyKey,
+        refundId: appointment.refundId || null,
+        status: appointment.refundStatus,
+        failureReason: appointment.refundFailureReason || 'Failed',
+        timestamp: new Date()
+    };
+
+    // Scoped new attempt key allows genuine re-attempt with provider (bypasses 24h failure cache)
+    const newAttemptKey = `ref_${appointment._id.toString()}_attempt_${newAttemptNumber}`;
+
     await appointmentModel.findByIdAndUpdate(appointmentId, {
         $set: {
             refundStatus: 'pending',
+            refundId: null,
+            refundIdempotencyKey: newAttemptKey,
             refundClaimedAt: null,
-            refundFailureReason: 'Admin retry requested'
+            refundClaimToken: null,
+            refundFailureReason: 'Admin retry requested after confirmed terminal failure'
+        },
+        $push: {
+            refundPreviousAttempts: historyEntry
         }
     });
 
