@@ -30,6 +30,15 @@ const appointmentSchema = new mongoose.Schema({
     refundAttempts: { type: Number, default: 0 },
     refundIdempotencyKey: { type: String, default: null },
     refundProviderStatus: { type: String, default: null },
+    refundClaimToken: { type: String, default: null },
+    refundPreviousAttempts: [{
+        attempt: { type: Number },
+        idempotencyKey: { type: String },
+        refundId: { type: String },
+        status: { type: String },
+        failureReason: { type: String },
+        timestamp: { type: Date }
+    }],
     // Payment identifier persistence (Phase 4 Task 4.1)
     paymentMethod: { type: String, enum: ['razorpay', 'stripe', 'cash', null], default: null },
     paymentId: { type: String, default: null },
