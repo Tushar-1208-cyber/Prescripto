@@ -7,6 +7,7 @@ import { v2 as cloudinary } from "cloudinary";
 import userModel from "../models/userModel.js";
 import { sendAppointmentReminderEmail, sendAppointmentCancellationEmail } from "../config/mailer.js";
 import { checkAndSendReminders } from "../services/scheduler.js";
+import { processRefund } from "../services/refundService.js";
 
 // API for admin login
 const loginAdmin = async (req, res) => {
@@ -55,23 +56,57 @@ const appointmentsAdmin = async (req, res) => {
 // API for appointment cancellation by admin
 const appointmentCancel = async (req, res) => {
     try {
-
         const { appointmentId } = req.body
+
+        if (!appointmentId) {
+            return res.status(400).json({ success: false, message: 'Missing appointment ID' })
+        }
 
         const appointmentData = await appointmentModel.findById(appointmentId)
         if (!appointmentData) {
             return res.status(404).json({ success: false, message: 'Appointment not found' })
         }
 
-        const wasPaid = appointmentData.payment
-        const updatePayload = { cancelled: true }
-        if (wasPaid) {
-            updatePayload.refundStatus = 'refunded'
+        if (appointmentData.isCompleted) {
+            return res.status(400).json({ success: false, message: 'Cannot cancel an already completed appointment' })
         }
 
-        await appointmentModel.findByIdAndUpdate(appointmentId, updatePayload)
+        if (appointmentData.cancelled) {
+            return res.status(400).json({ success: false, message: 'Appointment is already cancelled' })
+        }
 
-        // release doctor slot
+        const isEligibleRefund = Boolean(
+            appointmentData.payment &&
+            !appointmentData.isCash &&
+            appointmentData.paymentMode !== 'cash' &&
+            appointmentData.paymentMethod !== 'cash'
+        )
+
+        // Atomic conditional cancellation: prevents concurrent duplicate cancellations
+        const cancelledAppointment = await appointmentModel.findOneAndUpdate(
+            {
+                _id: appointmentId,
+                cancelled: false,
+                isCompleted: { $ne: true }
+            },
+            {
+                $set: {
+                    cancelled: true,
+                    ...(!isEligibleRefund ? { refundStatus: 'not_applicable' } : {})
+                }
+            },
+            { new: true }
+        )
+
+        if (!cancelledAppointment) {
+            const current = await appointmentModel.findById(appointmentId)
+            if (current?.isCompleted) {
+                return res.status(400).json({ success: false, message: 'Cannot cancel an already completed appointment' })
+            }
+            return res.status(400).json({ success: false, message: 'Appointment is already cancelled' })
+        }
+
+        // Release doctor slot
         const { docId, slotDate, slotTime } = appointmentData
         const doctorData = await doctorModel.findById(docId)
         if (doctorData && doctorData.slots_booked && doctorData.slots_booked[slotDate]) {
@@ -80,8 +115,43 @@ const appointmentCancel = async (req, res) => {
             await doctorModel.findByIdAndUpdate(docId, { slots_booked })
         }
 
-        // Task 3: Notify patient of admin cancellation
-        const refundNote = wasPaid ? 'Fee refund has been automatically initiated.' : ''
+        // Trigger isolated dedicated refund service for eligible online payments
+        let refundResult = null
+        if (isEligibleRefund) {
+            try {
+                refundResult = await processRefund(appointmentId)
+            } catch (refundErr) {
+                console.error('[admin appointmentCancel] Refund processing error:', refundErr.message)
+                refundResult = { success: false, status: 'failed', error: refundErr.message }
+            }
+        }
+
+        // Determine accurate status-specific messaging
+        let refundNote = ''
+        let responseMessage = 'Appointment Cancelled'
+        let finalRefundStatus = isEligibleRefund ? 'failed' : 'not_applicable'
+
+        if (isEligibleRefund && refundResult) {
+            if (refundResult.status === 'refunded') {
+                refundNote = 'Fee has been refunded successfully.'
+                responseMessage = 'Appointment Cancelled. Fee refund successfully processed.'
+                finalRefundStatus = 'refunded'
+            } else if (refundResult.status === 'pending') {
+                refundNote = 'Fee refund has been initiated and is pending provider settlement.'
+                responseMessage = 'Appointment Cancelled. Fee refund is pending provider settlement.'
+                finalRefundStatus = 'pending'
+            } else if (refundResult.status === 'ambiguous_timeout' || refundResult.status === 'temporary_outage') {
+                refundNote = 'Fee refund request is pending verification with the payment provider.'
+                responseMessage = 'Appointment Cancelled. Fee refund is pending provider reconciliation.'
+                finalRefundStatus = 'pending'
+            } else {
+                refundNote = 'Automated refund could not be processed. Our administrative team will review and process your refund manually.'
+                responseMessage = 'Appointment Cancelled. Automated fee refund failed and has been flagged for manual review.'
+                finalRefundStatus = 'failed'
+            }
+        }
+
+        // Task 3: Notify patient of admin cancellation (non-blocking)
         sendAppointmentCancellationEmail({
             to: appointmentData.userData?.email,
             recipientName: appointmentData.userData?.name,
@@ -93,7 +163,7 @@ const appointmentCancel = async (req, res) => {
             refundInfo: refundNote
         }).catch(err => console.log('[mailer] Admin cancellation email to patient error:', err.message))
 
-        // Task 3: Notify doctor of admin cancellation
+        // Task 3: Notify doctor of admin cancellation (non-blocking)
         if (doctorData?.email) {
             sendAppointmentCancellationEmail({
                 to: doctorData.email,
@@ -106,13 +176,17 @@ const appointmentCancel = async (req, res) => {
             }).catch(err => console.log('[mailer] Admin cancellation email to doctor error:', err.message))
         }
 
-        res.json({ success: true, message: 'Appointment Cancelled' })
+        return res.json({
+            success: true,
+            message: responseMessage,
+            refundStatus: finalRefundStatus,
+            ...(refundResult?.refundId ? { refundId: refundResult.refundId } : {})
+        })
 
     } catch (error) {
         console.log(error)
         res.status(500).json({ success: false, message: error.message })
     }
-
 }
 
 // API for adding Doctor
