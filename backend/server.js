@@ -5,7 +5,8 @@ import cors from 'cors'
 import helmet from 'helmet'
 import jwt from "jsonwebtoken"
 import 'dotenv/config'
-import connectDB from "./config/mongodb.js"
+import connectDB, { isDbConnected, closeDBConnection } from "./config/mongodb.js"
+import { validateEnv } from "./config/validateEnv.js"
 import connectCloudinary from "./config/cloudinary.js"
 import userRouter from "./routes/userRoute.js"
 import doctorRouter from "./routes/doctorRoute.js"
@@ -442,7 +443,14 @@ io.on("connection", (socket) => {
     })
 })
 
-connectDB()
+// Validate mandatory environment variables at startup
+validateEnv()
+
+// Initialize core infrastructure with top-level await
+await connectDB().catch((err) => {
+    console.error("[server] Fatal: Failed to initialize database connection:", err.message)
+    process.exit(1)
+})
 connectCloudinary()
 initReminderScheduler()
 
@@ -464,6 +472,32 @@ app.use(cors({
     },
     credentials: true
 }))
+
+// Health and Readiness checks (for load balancers, orchestrators, and monitoring)
+app.get("/health", (_req, res) => {
+    res.status(200).json({
+        status: "ok",
+        uptime: Math.floor(process.uptime()),
+        timestamp: new Date().toISOString()
+    })
+})
+
+app.get("/ready", (_req, res) => {
+    if (isDbConnected()) {
+        res.status(200).json({
+            status: "ready",
+            database: "connected",
+            uptime: Math.floor(process.uptime()),
+            timestamp: new Date().toISOString()
+        })
+    } else {
+        res.status(503).json({
+            status: "not_ready",
+            database: "disconnected",
+            timestamp: new Date().toISOString()
+        })
+    }
+})
 
 // api endpoints
 app.use("/api/webhook", webhookRouter)
@@ -488,4 +522,50 @@ app.use((err, _req, res, _next) => {
     })
 })
 
-httpServer.listen(port, () => console.log(`Server started on PORT:${port}`))   
+const server = httpServer.listen(port, () => console.log(`Server started on PORT:${port}`))
+
+// Graceful shutdown handling for SIGINT and SIGTERM
+let isShuttingDown = false
+const gracefulShutdown = async (signal) => {
+    if (isShuttingDown) return
+    isShuttingDown = true
+    console.log(`\n[server] ${signal} signal received: closing HTTP server and connections...`)
+
+    server.close(async () => {
+        console.log("[server] HTTP server closed.")
+        try {
+            io.close()
+            console.log("[server] Socket.IO closed.")
+        } catch (ioErr) {
+            console.error("[server] Error closing Socket.IO:", ioErr.message)
+        }
+
+        try {
+            await closeDBConnection()
+            console.log("[server] Database connection closed.")
+        } catch (dbErr) {
+            console.error("[server] Error closing database connection:", dbErr.message)
+        }
+
+        console.log("[server] Graceful shutdown complete. Exiting process.")
+        process.exit(0)
+    })
+
+    // Failsafe timeout to prevent hanging process
+    setTimeout(() => {
+        console.error("[server] Graceful shutdown timeout exceeded. Forcefully exiting.")
+        process.exit(1)
+    }, 10000).unref()
+}
+
+process.on("SIGINT", () => gracefulShutdown("SIGINT"))
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
+
+process.on("uncaughtException", (error) => {
+    console.error("[server] Uncaught Exception:", error.message)
+    gracefulShutdown("uncaughtException")
+})
+
+process.on("unhandledRejection", (reason) => {
+    console.error("[server] Unhandled Promise Rejection:", reason instanceof Error ? reason.message : reason)
+})   
