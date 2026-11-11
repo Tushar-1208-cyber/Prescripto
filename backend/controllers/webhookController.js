@@ -151,13 +151,11 @@ export const handleStripeWebhook = async (req, res) => {
     }
 
     const activeStripe = stripeInstance || (process.env.STRIPE_SECRET_KEY ? new stripe(process.env.STRIPE_SECRET_KEY) : null);
-    if (!activeStripe) {
-        return res.status(500).json({ success: false, message: 'Stripe client is not configured' });
-    }
+    const webhookConstructor = activeStripe?.webhooks || stripe.webhooks;
 
     let event;
     try {
-        event = activeStripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
+        event = webhookConstructor.constructEvent(req.rawBody, sig, webhookSecret);
     } catch (err) {
         console.error('[stripe-webhook] Signature verification failed:', err.message);
         return res.status(400).json({ success: false, message: `Invalid Stripe signature: ${err.message}` });
