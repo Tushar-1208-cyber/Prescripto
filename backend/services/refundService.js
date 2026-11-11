@@ -124,6 +124,97 @@ const safeDbUpdate = async (appointmentId, updatePayload, claimToken = null) => 
 };
 
 /**
+ * Strict matching validator for Stripe refunds.
+ * Validates:
+ * 1. PaymentIntent ID matches appointment.paymentId
+ * 2. Refund amount matches intended refundAmountMinor (or paymentAmountMinor)
+ * 3. Currency matches appointment.refundCurrency / paymentCurrency
+ * 4. Appointment metadata matches appointmentId if metadata is present
+ * 5. IdempotencyKey / attempt reference matches if metadata is present
+ */
+export const isMatchingStripeRefund = (refund, appointment) => {
+    if (!refund) return false;
+    const expectedPaymentId = appointment.paymentId;
+    const expectedAmountMinor = appointment.refundAmountMinor || appointment.paymentAmountMinor;
+    const expectedCurrency = (appointment.refundCurrency || appointment.paymentCurrency || 'inr').toLowerCase();
+    const expectedApptId = (appointment._id || appointment.id || '').toString();
+    const expectedIdempotencyKey = appointment.refundIdempotencyKey;
+
+    // 1. PaymentIntent verification
+    if (refund.payment_intent && expectedPaymentId && refund.payment_intent !== expectedPaymentId) {
+        return false;
+    }
+
+    // 2. Exact amount verification in minor units
+    if (typeof refund.amount === 'number' && typeof expectedAmountMinor === 'number') {
+        if (refund.amount !== expectedAmountMinor) return false;
+    }
+
+    // 3. Currency verification
+    if (refund.currency && expectedCurrency) {
+        if (refund.currency.toLowerCase() !== expectedCurrency) return false;
+    }
+
+    // 4. Appointment metadata verification
+    if (refund.metadata?.appointmentId && expectedApptId) {
+        if (refund.metadata.appointmentId.toString() !== expectedApptId) return false;
+    }
+
+    // 5. Attempt / idempotency reference verification
+    if (refund.metadata?.idempotencyKey && expectedIdempotencyKey) {
+        if (refund.metadata.idempotencyKey !== expectedIdempotencyKey) return false;
+    }
+
+    return true;
+};
+
+/**
+ * Strict matching validator for Razorpay refunds.
+ * Validates:
+ * 1. Payment ID matches appointment.paymentId
+ * 2. Refund amount matches intended refundAmountMinor (or paymentAmountMinor)
+ * 3. Currency matches appointment.refundCurrency / paymentCurrency
+ * 4. Appointment ID matches notes.appointmentId if notes are present
+ * 5. Receipt / attempt reference matches if receipt/notes are present
+ */
+export const isMatchingRazorpayRefund = (refund, appointment) => {
+    if (!refund) return false;
+    const expectedPaymentId = appointment.paymentId;
+    const expectedAmountMinor = appointment.refundAmountMinor || appointment.paymentAmountMinor;
+    const expectedCurrency = (appointment.refundCurrency || appointment.paymentCurrency || 'INR').toUpperCase();
+    const expectedApptId = (appointment._id || appointment.id || '').toString();
+    const expectedIdempotencyKey = appointment.refundIdempotencyKey;
+
+    // 1. Payment ID verification
+    if (refund.payment_id && expectedPaymentId && refund.payment_id !== expectedPaymentId) {
+        return false;
+    }
+
+    // 2. Exact amount verification in paise
+    if (typeof refund.amount === 'number' && typeof expectedAmountMinor === 'number') {
+        if (refund.amount !== expectedAmountMinor) return false;
+    }
+
+    // 3. Currency verification
+    if (refund.currency && expectedCurrency) {
+        if (refund.currency.toUpperCase() !== expectedCurrency) return false;
+    }
+
+    // 4. Appointment notes verification
+    if (refund.notes?.appointmentId && expectedApptId) {
+        if (refund.notes.appointmentId.toString() !== expectedApptId) return false;
+    }
+
+    // 5. Receipt / attempt reference verification
+    const refundReceipt = refund.receipt || refund.notes?.idempotencyKey;
+    if (refundReceipt && expectedIdempotencyKey) {
+        if (refundReceipt !== expectedIdempotencyKey) return false;
+    }
+
+    return true;
+};
+
+/**
  * Handle Razorpay refund failure scenarios
  */
 const handleRazorpayFailure = async (appointmentId, claimed, rzpErr, claimToken, customRequester) => {
@@ -131,7 +222,7 @@ const handleRazorpayFailure = async (appointmentId, claimed, rzpErr, claimToken,
     const errCode = rzpErr.error?.code || '';
     const statusCode = rzpErr.statusCode || rzpErr.status || 0;
 
-    // 1. Payment already refunded (idempotency safety check)
+    // 1. Payment already refunded (idempotency safety check with strict validation)
     const isAlreadyRefunded =
         errMsg.toLowerCase().includes('already') ||
         (errCode === 'BAD_REQUEST_ERROR' && errMsg.toLowerCase().includes('refund'));
@@ -143,12 +234,15 @@ const handleRazorpayFailure = async (appointmentId, claimed, rzpErr, claimToken,
                 method: 'GET'
             }, customRequester);
 
-            const latest = existingRefunds?.items?.[0];
-            if (latest) {
+            const matching = existingRefunds?.items?.filter(r => isMatchingRazorpayRefund(r, claimed)) || [];
+            const successful = matching.find(r => r.status === 'processed');
+            const pending = matching.find(r => r.status === 'pending');
+
+            if (successful) {
                 await safeDbUpdate(appointmentId, {
                     refundStatus: 'refunded',
-                    refundId: latest.id,
-                    refundProviderStatus: latest.status || 'processed',
+                    refundId: successful.id,
+                    refundProviderStatus: 'processed',
                     refundAmount: (claimed.paymentAmountMinor / 100),
                     refundAmountMinor: claimed.paymentAmountMinor,
                     refundCurrency: claimed.paymentCurrency,
@@ -161,8 +255,27 @@ const handleRazorpayFailure = async (appointmentId, claimed, rzpErr, claimToken,
                 return {
                     success: true,
                     status: 'refunded',
-                    refundId: latest.id,
+                    refundId: successful.id,
                     message: 'Payment was already fully refunded on Razorpay'
+                };
+            } else if (pending) {
+                await safeDbUpdate(appointmentId, {
+                    refundStatus: 'pending',
+                    refundId: pending.id,
+                    refundProviderStatus: 'pending',
+                    refundAmount: (claimed.paymentAmountMinor / 100),
+                    refundAmountMinor: claimed.paymentAmountMinor,
+                    refundCurrency: claimed.paymentCurrency,
+                    refundClaimedAt: null,
+                    refundClaimToken: null,
+                    refundFailureReason: 'Existing matching refund is pending settlement on Razorpay'
+                }, claimToken);
+
+                return {
+                    success: true,
+                    status: 'pending',
+                    refundId: pending.id,
+                    message: 'Existing matching refund is pending settlement on Razorpay'
                 };
             }
         } catch (fetchErr) {
@@ -238,7 +351,7 @@ const handleStripeFailure = async (appointmentId, claimed, stripeErr, activeStri
     const errMsg = stripeErr.message || '';
     const statusCode = stripeErr.statusCode || stripeErr.status || 0;
 
-    // 1. Charge / PaymentIntent already refunded (idempotency safety check)
+    // 1. Charge / PaymentIntent already refunded (idempotency safety check with strict validation)
     const isAlreadyRefunded =
         errCode === 'charge_already_refunded' ||
         errMsg.toLowerCase().includes('already refunded');
@@ -246,7 +359,10 @@ const handleStripeFailure = async (appointmentId, claimed, stripeErr, activeStri
     if (isAlreadyRefunded) {
         try {
             const existingRefunds = await activeStripe.refunds.list({ payment_intent: claimed.paymentId });
-            const successful = existingRefunds.data?.find(r => r.status === 'succeeded') || existingRefunds.data?.[0];
+            const matching = existingRefunds.data?.filter(r => isMatchingStripeRefund(r, claimed)) || [];
+            const successful = matching.find(r => r.status === 'succeeded');
+            const pending = matching.find(r => r.status === 'pending');
+
             if (successful) {
                 await safeDbUpdate(appointmentId, {
                     refundStatus: 'refunded',
@@ -266,6 +382,25 @@ const handleStripeFailure = async (appointmentId, claimed, stripeErr, activeStri
                     status: 'refunded',
                     refundId: successful.id,
                     message: 'Payment was already fully refunded on Stripe'
+                };
+            } else if (pending) {
+                await safeDbUpdate(appointmentId, {
+                    refundStatus: 'pending',
+                    refundId: pending.id,
+                    refundProviderStatus: 'pending',
+                    refundAmount: (claimed.paymentAmountMinor / 100),
+                    refundAmountMinor: claimed.paymentAmountMinor,
+                    refundCurrency: claimed.paymentCurrency,
+                    refundClaimedAt: null,
+                    refundClaimToken: null,
+                    refundFailureReason: 'Existing matching refund is pending settlement on Stripe'
+                }, claimToken);
+
+                return {
+                    success: true,
+                    status: 'pending',
+                    refundId: pending.id,
+                    message: 'Existing matching refund is pending settlement on Stripe'
                 };
             }
         } catch (listErr) {
@@ -378,10 +513,23 @@ const pollExistingRefund = async (appointment, options = {}) => {
             if (!activeStripe) throw new Error('Stripe client not configured');
             const strRefund = await activeStripe.refunds.retrieve(appointment.refundId);
 
+            if (!isMatchingStripeRefund(strRefund, appointment)) {
+                await safeDbUpdate(appointmentId, {
+                    refundStatus: 'failed',
+                    refundClaimedAt: null,
+                    refundClaimToken: null,
+                    refundFailureReason: `Retrieved Stripe refund ${appointment.refundId} failed validation criteria (payment, amount, or currency mismatch)`
+                }, claimToken);
+                return { success: false, status: 'validation_failed', refundId: strRefund?.id, message: 'Retrieved Stripe refund failed validation criteria' };
+            }
+
             if (strRefund.status === 'succeeded') {
                 await safeDbUpdate(appointmentId, {
                     refundStatus: 'refunded',
                     refundProviderStatus: 'succeeded',
+                    refundAmount: (claimed.paymentAmountMinor / 100),
+                    refundAmountMinor: claimed.paymentAmountMinor,
+                    refundCurrency: claimed.paymentCurrency,
                     refundedAt: new Date(),
                     refundClaimedAt: null,
                     refundClaimToken: null,
@@ -415,10 +563,23 @@ const pollExistingRefund = async (appointment, options = {}) => {
                 method: 'GET'
             }, customHttp);
 
+            if (!isMatchingRazorpayRefund(rzpRefund, appointment)) {
+                await safeDbUpdate(appointmentId, {
+                    refundStatus: 'failed',
+                    refundClaimedAt: null,
+                    refundClaimToken: null,
+                    refundFailureReason: `Retrieved Razorpay refund ${appointment.refundId} failed validation criteria (payment, amount, or notes mismatch)`
+                }, claimToken);
+                return { success: false, status: 'validation_failed', refundId: rzpRefund?.id, message: 'Retrieved Razorpay refund failed validation criteria' };
+            }
+
             if (rzpRefund.status === 'processed') {
                 await safeDbUpdate(appointmentId, {
                     refundStatus: 'refunded',
                     refundProviderStatus: 'processed',
+                    refundAmount: (claimed.paymentAmountMinor / 100),
+                    refundAmountMinor: claimed.paymentAmountMinor,
+                    refundCurrency: claimed.paymentCurrency,
                     refundedAt: new Date(),
                     refundClaimedAt: null,
                     refundClaimToken: null,
@@ -876,46 +1037,57 @@ export const reconcileRefund = async (appointmentId, options = {}) => {
             if (appointment.refundId) {
                 try {
                     const exact = await activeStripe.refunds.retrieve(appointment.refundId);
-                    if (exact.status === 'succeeded') {
-                        await safeDbUpdate(appointmentId, {
-                            refundStatus: 'refunded',
-                            refundProviderStatus: 'succeeded',
-                            refundedAt: new Date(),
-                            refundClaimedAt: null,
-                            refundClaimToken: null,
-                            refundFailureReason: null
-                        });
-                        return { success: true, status: 'refunded', refundId: exact.id, message: 'Reconciled: exact refund confirmed succeeded on Stripe' };
-                    } else if (exact.status === 'pending') {
-                        await safeDbUpdate(appointmentId, {
-                            refundStatus: 'pending',
-                            refundProviderStatus: 'pending',
-                            refundClaimedAt: null,
-                            refundClaimToken: null
-                        });
-                        return { success: true, status: 'pending', refundId: exact.id, message: 'Reconciled: exact refund is pending on Stripe' };
+                    if (isMatchingStripeRefund(exact, appointment)) {
+                        if (exact.status === 'succeeded') {
+                            await safeDbUpdate(appointmentId, {
+                                refundStatus: 'refunded',
+                                refundProviderStatus: 'succeeded',
+                                refundAmount: (appointment.paymentAmountMinor / 100),
+                                refundAmountMinor: appointment.paymentAmountMinor,
+                                refundCurrency: appointment.paymentCurrency,
+                                refundedAt: new Date(),
+                                refundClaimedAt: null,
+                                refundClaimToken: null,
+                                refundFailureReason: null
+                            });
+                            return { success: true, status: 'refunded', refundId: exact.id, message: 'Reconciled: exact refund confirmed succeeded on Stripe' };
+                        } else if (exact.status === 'pending') {
+                            await safeDbUpdate(appointmentId, {
+                                refundStatus: 'pending',
+                                refundProviderStatus: 'pending',
+                                refundClaimedAt: null,
+                                refundClaimToken: null
+                            });
+                            return { success: true, status: 'pending', refundId: exact.id, message: 'Reconciled: exact refund is pending on Stripe' };
+                        }
+                    } else {
+                        console.warn(`[reconcileRefund] Retrieved Stripe refund ${appointment.refundId} failed matching validation criteria`);
                     }
                 } catch (retrieveErr) {
                     console.warn(`[reconcileRefund] Stripe retrieve for ${appointment.refundId} failed, falling back to list:`, retrieveErr.message);
                 }
             }
 
-            // Fallback: list refunds by payment_intent
+            // Fallback: list refunds by payment_intent with strict matching
             const refundsList = await activeStripe.refunds.list({ payment_intent: appointment.paymentId });
-            const successful = refundsList.data?.find(r => r.status === 'succeeded');
-            const pending = refundsList.data?.find(r => r.status === 'pending');
+            const matchingRefunds = refundsList.data?.filter(r => isMatchingStripeRefund(r, appointment)) || [];
+            const successful = matchingRefunds.find(r => r.status === 'succeeded');
+            const pending = matchingRefunds.find(r => r.status === 'pending');
 
             if (successful) {
                 await safeDbUpdate(appointmentId, {
                     refundStatus: 'refunded',
                     refundId: successful.id,
                     refundProviderStatus: 'succeeded',
+                    refundAmount: (appointment.paymentAmountMinor / 100),
+                    refundAmountMinor: appointment.paymentAmountMinor,
+                    refundCurrency: appointment.paymentCurrency,
                     refundedAt: new Date(),
                     refundClaimedAt: null,
                     refundClaimToken: null,
                     refundFailureReason: null
                 });
-                return { success: true, status: 'refunded', refundId: successful.id, message: 'Reconciled: refund confirmed on Stripe' };
+                return { success: true, status: 'refunded', refundId: successful.id, message: 'Reconciled: matching refund confirmed on Stripe' };
             } else if (pending) {
                 await safeDbUpdate(appointmentId, {
                     refundStatus: 'pending',
@@ -924,15 +1096,15 @@ export const reconcileRefund = async (appointmentId, options = {}) => {
                     refundClaimedAt: null,
                     refundClaimToken: null
                 });
-                return { success: true, status: 'pending', refundId: pending.id, message: 'Reconciled: refund is pending on Stripe' };
+                return { success: true, status: 'pending', refundId: pending.id, message: 'Reconciled: matching refund is pending on Stripe' };
             } else {
-                // No refund found on gateway: unlock claim to allow fresh retry
+                // No matching refund found on gateway: unlock claim to allow fresh retry
                 await safeDbUpdate(appointmentId, {
                     refundClaimedAt: null,
                     refundClaimToken: null,
-                    refundFailureReason: 'Reconciled: No refund found on Stripe. Ready for retry.'
+                    refundFailureReason: 'Reconciled: No matching refund found on Stripe. Ready for retry.'
                 });
-                return { success: true, status: 'no_refund_found', message: 'No refund found on Stripe. Claim released for retry.' };
+                return { success: true, status: 'no_refund_found', message: 'No matching refund found on Stripe. Claim released for retry.' };
             }
         }
 
@@ -946,50 +1118,61 @@ export const reconcileRefund = async (appointmentId, options = {}) => {
                         method: 'GET'
                     }, customRzpHttp);
 
-                    if (exact && exact.status === 'processed') {
-                        await safeDbUpdate(appointmentId, {
-                            refundStatus: 'refunded',
-                            refundProviderStatus: 'processed',
-                            refundedAt: new Date(),
-                            refundClaimedAt: null,
-                            refundClaimToken: null,
-                            refundFailureReason: null
-                        });
-                        return { success: true, status: 'refunded', refundId: exact.id, message: 'Reconciled: exact refund confirmed processed on Razorpay' };
-                    } else if (exact && exact.status === 'pending') {
-                        await safeDbUpdate(appointmentId, {
-                            refundStatus: 'pending',
-                            refundProviderStatus: 'pending',
-                            refundClaimedAt: null,
-                            refundClaimToken: null
-                        });
-                        return { success: true, status: 'pending', refundId: exact.id, message: 'Reconciled: exact refund is pending on Razorpay' };
+                    if (exact && isMatchingRazorpayRefund(exact, appointment)) {
+                        if (exact.status === 'processed') {
+                            await safeDbUpdate(appointmentId, {
+                                refundStatus: 'refunded',
+                                refundProviderStatus: 'processed',
+                                refundAmount: (appointment.paymentAmountMinor / 100),
+                                refundAmountMinor: appointment.paymentAmountMinor,
+                                refundCurrency: appointment.paymentCurrency,
+                                refundedAt: new Date(),
+                                refundClaimedAt: null,
+                                refundClaimToken: null,
+                                refundFailureReason: null
+                            });
+                            return { success: true, status: 'refunded', refundId: exact.id, message: 'Reconciled: exact refund confirmed processed on Razorpay' };
+                        } else if (exact.status === 'pending') {
+                            await safeDbUpdate(appointmentId, {
+                                refundStatus: 'pending',
+                                refundProviderStatus: 'pending',
+                                refundClaimedAt: null,
+                                refundClaimToken: null
+                            });
+                            return { success: true, status: 'pending', refundId: exact.id, message: 'Reconciled: exact refund is pending on Razorpay' };
+                        }
+                    } else if (exact) {
+                        console.warn(`[reconcileRefund] Retrieved Razorpay refund ${appointment.refundId} failed matching validation criteria`);
                     }
                 } catch (retrieveErr) {
                     console.warn(`[reconcileRefund] Razorpay retrieve for ${appointment.refundId} failed, falling back to list:`, retrieveErr.message);
                 }
             }
 
-            // Fallback: list refunds by payment_id
+            // Fallback: list refunds by payment_id with strict matching
             const refundsList = await executeRazorpayHttp({
                 path: `/payments/${appointment.paymentId}/refunds`,
                 method: 'GET'
             }, customRzpHttp);
 
-            const successful = refundsList?.items?.find(r => r.status === 'processed');
-            const pending = refundsList?.items?.find(r => r.status === 'pending');
+            const matchingRefunds = refundsList?.items?.filter(r => isMatchingRazorpayRefund(r, appointment)) || [];
+            const successful = matchingRefunds.find(r => r.status === 'processed');
+            const pending = matchingRefunds.find(r => r.status === 'pending');
 
             if (successful) {
                 await safeDbUpdate(appointmentId, {
                     refundStatus: 'refunded',
                     refundId: successful.id,
                     refundProviderStatus: 'processed',
+                    refundAmount: (appointment.paymentAmountMinor / 100),
+                    refundAmountMinor: appointment.paymentAmountMinor,
+                    refundCurrency: appointment.paymentCurrency,
                     refundedAt: new Date(),
                     refundClaimedAt: null,
                     refundClaimToken: null,
                     refundFailureReason: null
                 });
-                return { success: true, status: 'refunded', refundId: successful.id, message: 'Reconciled: refund confirmed on Razorpay' };
+                return { success: true, status: 'refunded', refundId: successful.id, message: 'Reconciled: matching refund confirmed on Razorpay' };
             } else if (pending) {
                 await safeDbUpdate(appointmentId, {
                     refundStatus: 'pending',
@@ -998,14 +1181,14 @@ export const reconcileRefund = async (appointmentId, options = {}) => {
                     refundClaimedAt: null,
                     refundClaimToken: null
                 });
-                return { success: true, status: 'pending', refundId: pending.id, message: 'Reconciled: refund is pending on Razorpay' };
+                return { success: true, status: 'pending', refundId: pending.id, message: 'Reconciled: matching refund is pending on Razorpay' };
             } else {
                 await safeDbUpdate(appointmentId, {
                     refundClaimedAt: null,
                     refundClaimToken: null,
-                    refundFailureReason: 'Reconciled: No refund found on Razorpay. Ready for retry.'
+                    refundFailureReason: 'Reconciled: No matching refund found on Razorpay. Ready for retry.'
                 });
-                return { success: true, status: 'no_refund_found', message: 'No refund found on Razorpay. Claim released for retry.' };
+                return { success: true, status: 'no_refund_found', message: 'No matching refund found on Razorpay. Claim released for retry.' };
             }
         }
 
@@ -1079,5 +1262,7 @@ export default {
     processRefund,
     reconcileRefund,
     retryFailedRefund,
-    setRefundGatewayClients
+    setRefundGatewayClients,
+    isMatchingStripeRefund,
+    isMatchingRazorpayRefund
 };
