@@ -13,6 +13,7 @@ import adminRouter from "./routes/adminRoute.js"
 import chatRouter from "./routes/chatRoute.js"
 import videoRouter from "./routes/videoRoute.js"
 import recommendationRouter from "./routes/recommendationRoute.js"
+import webhookRouter from "./routes/webhookRoute.js"
 import messageModel from "./models/messageModel.js"
 import appointmentModel from "./models/appointmentModel.js"
 import { initReminderScheduler } from "./services/scheduler.js"
@@ -446,7 +447,11 @@ connectCloudinary()
 initReminderScheduler()
 
 // middlewares
-app.use(express.json())
+app.use(express.json({
+    verify: (req, _res, buf) => {
+        req.rawBody = buf
+    }
+}))
 app.use(helmet())
 
 app.use(cors({
@@ -461,6 +466,7 @@ app.use(cors({
 }))
 
 // api endpoints
+app.use("/api/webhook", webhookRouter)
 app.use("/api/user", userRouter)
 app.use("/api/admin", adminRouter)
 app.use("/api/doctor", doctorRouter)
