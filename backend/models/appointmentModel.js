@@ -80,6 +80,9 @@ appointmentSchema.index({ docId: 1 })
 appointmentSchema.index({ slotDate: 1 })
 appointmentSchema.index({ paymentId: 1 }, { sparse: true })
 appointmentSchema.index({ refundId: 1 }, { sparse: true })
+appointmentSchema.index({ orderId: 1 }, { sparse: true })
+appointmentSchema.index({ checkoutSessionId: 1 }, { sparse: true })
+appointmentSchema.index({ cancelled: 1, refundStatus: 1 })
 
 const appointmentModel = mongoose.models.appointment || mongoose.model("appointment", appointmentSchema)
 export default appointmentModel
