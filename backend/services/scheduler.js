@@ -1,6 +1,7 @@
 import cron from "node-cron"
 import appointmentModel from "../models/appointmentModel.js"
 import { sendAppointmentReminderEmail, sendPaymentReceiptEmail } from "../config/mailer.js"
+import { reconcileRefund, processRefund } from "./refundService.js"
 
 // Timeout after which a 'sending' claim is considered stale and available for recovery
 export const CLAIM_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
@@ -296,18 +297,104 @@ export const checkAndRetryReceipts = async () => {
     }
 }
 
+// In-process re-entrancy lock to prevent overlapping reconciliation runs
+let isReconcilingRefunds = false
+
 /**
- * Initializes cron schedule to run every 15 minutes.
+ * Reconciles pending/unprocessed refunds for cancelled online-paid appointments.
+ * Discovers and recovers appointments that crashed before processRefund,
+ * appointments whose provider refunds settled asynchronously, or appointments
+ * with expired processing claims.
+ */
+export const reconcilePendingRefunds = async (options = {}) => {
+    if (isReconcilingRefunds) {
+        console.log('[scheduler] Refund reconciliation already in progress, skipping tick.')
+        return { skipped: true, inProgress: true }
+    }
+
+    isReconcilingRefunds = true
+    try {
+        const staleThreshold = new Date(Date.now() - CLAIM_TIMEOUT_MS)
+        const batchSize = Number(process.env.REFUND_RECONCILER_BATCH_SIZE) || options.batchSize || 20
+
+        // Find cancelled, paid appointments with eligible unfinalized refund states
+        const candidates = await appointmentModel.find({
+            cancelled: true,
+            payment: true,
+            paymentMethod: { $in: ['stripe', 'razorpay'] },
+            refundStatus: { $ne: 'refunded' },
+            $or: [
+                { refundStatus: 'pending' },
+                { refundStatus: 'none' },
+                { refundStatus: null },
+                { refundStatus: 'processing', refundClaimedAt: { $lt: staleThreshold } }
+            ]
+        }).limit(batchSize)
+
+        let reconciledCount = 0
+        let initiatedCount = 0
+        let errorCount = 0
+
+        for (const appt of candidates) {
+            try {
+                // Step 1: Query provider first via reconcileRefund to verify if refund already exists
+                const reconResult = await reconcileRefund(appt._id, options)
+
+                if (reconResult.status === 'refunded') {
+                    console.log(`[scheduler] Reconciled completed refund for appointment ${appt._id}`)
+                    reconciledCount++
+                    continue
+                }
+
+                if (reconResult.status === 'pending') {
+                    console.log(`[scheduler] Refund remains pending with provider for appointment ${appt._id}`)
+                    reconciledCount++
+                    continue
+                }
+
+                // Step 2: Only if explicitly confirmed no matching refund exists on provider, initiate processRefund
+                if (reconResult.status === 'no_refund_found') {
+                    console.log(`[scheduler] No provider refund found for ${appt._id}. Initiating processRefund.`)
+                    const refundResult = await processRefund(appt._id, options)
+                    if (refundResult.status === 'refunded' || refundResult.status === 'pending') {
+                        initiatedCount++
+                    }
+                }
+            } catch (err) {
+                console.error(`[scheduler] Error reconciling appointment ${appt._id}:`, err.message)
+                errorCount++
+            }
+        }
+
+        return {
+            totalCandidates: candidates.length,
+            reconciledCount,
+            initiatedCount,
+            errorCount
+        }
+    } catch (error) {
+        console.error('[scheduler] Error in reconcilePendingRefunds:', error.message)
+        return { error: error.message }
+    } finally {
+        isReconcilingRefunds = false
+    }
+}
+
+/**
+ * Initializes cron schedule to run every 15 minutes (or configured interval).
  */
 export const initReminderScheduler = () => {
     try {
-        // Run every 15 minutes: at minute 0, 15, 30, 45
-        cron.schedule('*/15 * * * *', async () => {
-            console.log('[scheduler] Executing automated appointment reminder cron job...')
+        const intervalMin = Number(process.env.REFUND_RECONCILER_INTERVAL_MIN) || 15
+        const cronExpr = (intervalMin > 0 && intervalMin <= 59) ? `*/${intervalMin} * * * *` : '*/15 * * * *'
+
+        cron.schedule(cronExpr, async () => {
+            console.log('[scheduler] Executing automated appointment reminder and refund reconciliation cron job...')
             await checkAndSendReminders()
             await checkAndRetryReceipts()
+            await reconcilePendingRefunds()
         })
-        console.log('[scheduler] Automated appointment reminder scheduler initialized (every 15 min)')
+        console.log(`[scheduler] Automated scheduler initialized (every ${intervalMin} min)`)
     } catch (error) {
         console.error('[scheduler] Failed to initialize cron scheduler:', error.message)
     }
@@ -318,5 +405,6 @@ export default {
     parseAppointmentSlot,
     checkAndSendReminders,
     checkAndRetryReceipts,
+    reconcilePendingRefunds,
     initReminderScheduler
 }
