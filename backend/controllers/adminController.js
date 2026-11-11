@@ -197,9 +197,9 @@ const addDoctor = async (req, res) => {
         const { name, email, password, speciality, degree, experience, about, fees, address } = req.body
         const imageFile = req.file
 
-        // checking for all data to add doctor
-        if (!name || !email || !password || !speciality || !degree || !experience || !about || !fees || !address) {
-            return res.json({ success: false, message: "Missing Details" })
+        // checking for all data to add doctor including image
+        if (!imageFile || !name || !email || !password || !speciality || !degree || !experience || !about || !fees || !address) {
+            return res.status(400).json({ success: false, message: "Missing Details or Doctor Image" })
         }
 
         // validating email format
@@ -330,10 +330,28 @@ const toggleBlockUser = async (req, res) => {
 const deleteDoctor = async (req, res) => {
     try {
         const { docId } = req.body
+        if (!docId) {
+            return res.status(400).json({ success: false, message: 'Doctor ID is required' })
+        }
+
         const doctor = await doctorModel.findById(docId)
         if (!doctor) {
             return res.status(404).json({ success: false, message: 'Doctor not found' })
         }
+
+        // Prevent deleting doctor if there are active, upcoming scheduled appointments
+        const activeAppointments = await appointmentModel.countDocuments({
+            docId,
+            cancelled: false,
+            isCompleted: false
+        })
+        if (activeAppointments > 0) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot delete doctor with ${activeAppointments} active upcoming appointment(s). Please cancel or reassign them first.`
+            })
+        }
+
         await doctorModel.findByIdAndDelete(docId)
         res.json({ success: true, message: 'Doctor deleted successfully' })
     } catch (error) {
