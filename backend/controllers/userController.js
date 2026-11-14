@@ -19,12 +19,40 @@ import {
 } from "../config/mailer.js";
 import { processRefund } from "../services/refundService.js";
 
-// Gateway Initialize
-const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY)
-const razorpayInstance = new razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
-})
+// Gateway Initialize (lazy/conditional to prevent startup crash when payment credentials are not configured)
+let stripeInstance = null;
+let razorpayInstance = null;
+
+const getStripeInstance = () => {
+    if (stripeInstance) return stripeInstance;
+    const secretKey = process.env.STRIPE_SECRET_KEY;
+    if (!secretKey || typeof secretKey !== 'string' || !secretKey.trim()) {
+        return null;
+    }
+    stripeInstance = new stripe(secretKey.trim());
+    return stripeInstance;
+};
+
+const getRazorpayInstance = () => {
+    if (razorpayInstance) return razorpayInstance;
+    const key_id = process.env.RAZORPAY_KEY_ID;
+    const key_secret = process.env.RAZORPAY_KEY_SECRET;
+    if (!key_id || typeof key_id !== 'string' || !key_id.trim() ||
+        !key_secret || typeof key_secret !== 'string' || !key_secret.trim()) {
+        return null;
+    }
+    razorpayInstance = new razorpay({
+        key_id: key_id.trim(),
+        key_secret: key_secret.trim(),
+    });
+    return razorpayInstance;
+};
+
+// Dependency injection helper for test suites
+const setUserControllerPaymentClients = ({ stripe: mockStripe, razorpay: mockRazorpay } = {}) => {
+    if (mockStripe !== undefined) stripeInstance = mockStripe;
+    if (mockRazorpay !== undefined) razorpayInstance = mockRazorpay;
+};
 
 // API to register user
 const registerUser = async (req, res) => {
@@ -430,6 +458,16 @@ const listAppointment = async (req, res) => {
 const paymentRazorpay = async (req, res) => {
     try {
         const { appointmentId, userId } = req.body
+
+        if (!appointmentId) {
+            return res.status(400).json({ success: false, message: 'Missing appointment ID' })
+        }
+
+        const razorpay = getRazorpayInstance()
+        if (!razorpay) {
+            return res.status(503).json({ success: false, message: 'Razorpay payment gateway is not configured on this server' })
+        }
+
         const appointmentData = await appointmentModel.findById(appointmentId)
 
         if (!appointmentData) {
@@ -456,7 +494,7 @@ const paymentRazorpay = async (req, res) => {
         }
 
         // creation of an order
-        const order = await razorpayInstance.orders.create(options)
+        const order = await razorpay.orders.create(options)
 
         // Persist generated orderId to the appointment record (Phase 4 Task 4.1)
         await appointmentModel.findByIdAndUpdate(appointmentId, { orderId: order.id })
@@ -478,7 +516,13 @@ const verifyRazorpay = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Order ID, payment ID, and signature are required' })
         }
 
-        const orderInfo = await razorpayInstance.orders.fetch(razorpay_order_id)
+        const razorpay = getRazorpayInstance()
+        const keySecret = process.env.RAZORPAY_KEY_SECRET
+        if (!razorpay || !keySecret || !keySecret.trim()) {
+            return res.status(503).json({ success: false, message: 'Razorpay payment gateway is not configured on this server' })
+        }
+
+        const orderInfo = await razorpay.orders.fetch(razorpay_order_id)
         if (!orderInfo || !orderInfo.receipt) {
             return res.status(404).json({ success: false, message: 'Order not found' })
         }
@@ -503,11 +547,8 @@ const verifyRazorpay = async (req, res) => {
         }
 
         // Cryptographic signature validation
-        if (!process.env.RAZORPAY_KEY_SECRET) {
-            return res.status(500).json({ success: false, message: 'Razorpay secret key not configured' })
-        }
         const expectedSignature = crypto
-            .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+            .createHmac('sha256', keySecret.trim())
             .update(`${razorpay_order_id}|${razorpay_payment_id}`)
             .digest('hex')
 
@@ -518,7 +559,7 @@ const verifyRazorpay = async (req, res) => {
         // Fetch payment details from Razorpay to verify capture status and order binding
         let paymentInfo
         try {
-            paymentInfo = await razorpayInstance.payments.fetch(razorpay_payment_id)
+            paymentInfo = await razorpay.payments.fetch(razorpay_payment_id)
         } catch (fetchErr) {
             console.error('[verifyRazorpay] Payment fetch error:', fetchErr.message)
             return res.status(400).json({ success: false, message: 'Unable to verify payment status with gateway' })
@@ -671,6 +712,15 @@ const paymentStripe = async (req, res) => {
         const { appointmentId, userId } = req.body
         const { origin } = req.headers
 
+        if (!appointmentId) {
+            return res.status(400).json({ success: false, message: 'Missing appointment ID' })
+        }
+
+        const stripeClient = getStripeInstance()
+        if (!stripeClient) {
+            return res.status(503).json({ success: false, message: 'Stripe payment gateway is not configured on this server' })
+        }
+
         const appointmentData = await appointmentModel.findById(appointmentId)
 
         if (!appointmentData) {
@@ -702,7 +752,7 @@ const paymentStripe = async (req, res) => {
             quantity: 1
         }]
 
-        const session = await stripeInstance.checkout.sessions.create({
+        const session = await stripeClient.checkout.sessions.create({
             success_url: `${origin}/verify?success=true&appointmentId=${appointmentData._id}&session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${origin}/verify?success=false&appointmentId=${appointmentData._id}`,
             line_items: line_items,
@@ -740,6 +790,11 @@ const verifyStripe = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Valid Stripe session ID is required' })
         }
 
+        const stripeClient = getStripeInstance()
+        if (!stripeClient) {
+            return res.status(503).json({ success: false, message: 'Stripe payment gateway is not configured on this server' })
+        }
+
         const appointmentData = await appointmentModel.findById(appointmentId)
         if (!appointmentData) {
             return res.status(404).json({ success: false, message: 'Appointment not found' })
@@ -761,7 +816,7 @@ const verifyStripe = async (req, res) => {
         // Server-side verification directly via Stripe API with payment_intent expanded
         let session
         try {
-            session = await stripeInstance.checkout.sessions.retrieve(session_id.trim(), {
+            session = await stripeClient.checkout.sessions.retrieve(session_id.trim(), {
                 expand: ['payment_intent']
             })
         } catch (stripeError) {
@@ -804,7 +859,7 @@ const verifyStripe = async (req, res) => {
         if (typeof paymentIntent === 'string') {
             paymentIntentId = paymentIntent
             try {
-                paymentIntent = await stripeInstance.paymentIntents.retrieve(paymentIntentId)
+                paymentIntent = await stripeClient.paymentIntents.retrieve(paymentIntentId)
             } catch (piErr) {
                 console.error('[verifyStripe] PaymentIntent retrieval error:', piErr.message)
                 return res.status(400).json({ success: false, message: 'Failed to verify Stripe PaymentIntent' })
@@ -1144,5 +1199,8 @@ export {
     addReview,
     rescheduleAppointment,
     sendResetOtp,
-    resetPassword
+    resetPassword,
+    getStripeInstance,
+    getRazorpayInstance,
+    setUserControllerPaymentClients
 }
