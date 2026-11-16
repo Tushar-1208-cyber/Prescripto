@@ -474,7 +474,7 @@ app.use(cors({
 }))
 
 // Health and Readiness checks (for load balancers, orchestrators, and monitoring)
-app.get("/health", (_req, res) => {
+app.get(["/health", "/api/health"], (_req, res) => {
     res.status(200).json({
         status: "ok",
         uptime: Math.floor(process.uptime()),
@@ -482,7 +482,7 @@ app.get("/health", (_req, res) => {
     })
 })
 
-app.get("/ready", (_req, res) => {
+app.get(["/ready", "/api/ready"], (_req, res) => {
     if (isDbConnected()) {
         res.status(200).json({
             status: "ready",
@@ -522,7 +522,7 @@ app.use((err, _req, res, _next) => {
     })
 })
 
-const server = httpServer.listen(port, () => console.log(`Server started on PORT:${port}`))
+const server = httpServer.listen(port, "0.0.0.0", () => console.log(`Server started on PORT:${port}`))
 
 // Graceful shutdown handling for SIGINT and SIGTERM
 let isShuttingDown = false
