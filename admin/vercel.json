@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/admin-assets/:path*",
+      "destination": "/:path*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/"
     }
