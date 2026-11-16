@@ -1,12 +1,16 @@
 import axios from 'axios'
 import React, { useContext, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { DoctorContext } from '../context/DoctorContext'
 import { AdminContext } from '../context/AdminContext'
 import { toast } from 'react-toastify'
 
 const Login = () => {
 
-  const [state, setState] = useState('Admin')
+  const location = useLocation()
+  const navigate = useNavigate()
+  const isDoctorPath = location.pathname.startsWith('/doctor')
+  const [state, setState] = useState(isDoctorPath ? 'Doctor' : 'Admin')
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -26,6 +30,7 @@ const Login = () => {
       if (data.success) {
         setAToken(data.token)
         localStorage.setItem('aToken', data.token)
+        navigate('/admin')
       } else {
         toast.error(data.message)
       }
@@ -36,6 +41,7 @@ const Login = () => {
       if (data.success) {
         setDToken(data.token)
         localStorage.setItem('dToken', data.token)
+        navigate('/doctor')
       } else {
         toast.error(data.message)
       }
@@ -59,8 +65,8 @@ const Login = () => {
         <button className='bg-primary text-white w-full py-2 rounded-md text-base'>Login</button>
         {
           state === 'Admin'
-            ? <p>Doctor Login? <span onClick={() => setState('Doctor')} className='text-primary underline cursor-pointer'>Click here</span></p>
-            : <p>Admin Login? <span onClick={() => setState('Admin')} className='text-primary underline cursor-pointer'>Click here</span></p>
+            ? <p>Doctor Login? <span onClick={() => { setState('Doctor'); navigate('/doctor') }} className='text-primary underline cursor-pointer'>Click here</span></p>
+            : <p>Admin Login? <span onClick={() => { setState('Admin'); navigate('/admin') }} className='text-primary underline cursor-pointer'>Click here</span></p>
         }
       </div>
     </form>
