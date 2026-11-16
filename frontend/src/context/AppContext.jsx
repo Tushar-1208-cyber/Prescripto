@@ -7,7 +7,8 @@ export const AppContext = createContext()
 const AppContextProvider = (props) => {
 
     const currencySymbol = '₹'
-    const backendUrl = import.meta.env.VITE_BACKEND_URL
+    const rawBackendUrl = import.meta.env.VITE_BACKEND_URL
+    const backendUrl = ((rawBackendUrl && !rawBackendUrl.includes('ylkw')) ? rawBackendUrl : 'https://prescripto-backend-y1kv.onrender.com').replace(/\/+$/, '')
 
     const [doctors, setDoctors] = useState([])
     const [token, setToken] = useState(localStorage.getItem('token') ? localStorage.getItem('token') : '')
