@@ -7,7 +7,8 @@ export const DoctorContext = createContext()
 
 const DoctorContextProvider = (props) => {
 
-    const backendUrl = import.meta.env.VITE_BACKEND_URL
+    const rawBackendUrl = import.meta.env.VITE_BACKEND_URL
+    const backendUrl = ((rawBackendUrl && !rawBackendUrl.includes('ylkw')) ? rawBackendUrl : 'https://prescripto-backend-y1kv.onrender.com').replace(/\/+$/, '')
 
     const [dToken, setDToken] = useState(localStorage.getItem('dToken') ? localStorage.getItem('dToken') : '')
     const [appointments, setAppointments] = useState([])
