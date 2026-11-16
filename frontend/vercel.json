@@ -1,6 +1,54 @@
 {
   "rewrites": [
     {
+      "source": "/admin-assets/:path*",
+      "destination": "https://prescripto-admin-theta-two.vercel.app/admin-assets/:path*"
+    },
+    {
+      "source": "/admin",
+      "destination": "https://prescripto-admin-theta-two.vercel.app/admin"
+    },
+    {
+      "source": "/admin/:path*",
+      "destination": "https://prescripto-admin-theta-two.vercel.app/admin/:path*"
+    },
+    {
+      "source": "/admin-dashboard",
+      "destination": "https://prescripto-admin-theta-two.vercel.app/admin-dashboard"
+    },
+    {
+      "source": "/all-appointments",
+      "destination": "https://prescripto-admin-theta-two.vercel.app/all-appointments"
+    },
+    {
+      "source": "/add-doctor",
+      "destination": "https://prescripto-admin-theta-two.vercel.app/add-doctor"
+    },
+    {
+      "source": "/doctor-list",
+      "destination": "https://prescripto-admin-theta-two.vercel.app/doctor-list"
+    },
+    {
+      "source": "/doctor",
+      "destination": "https://prescripto-admin-theta-two.vercel.app/doctor"
+    },
+    {
+      "source": "/doctor/:path*",
+      "destination": "https://prescripto-admin-theta-two.vercel.app/doctor/:path*"
+    },
+    {
+      "source": "/doctor-dashboard",
+      "destination": "https://prescripto-admin-theta-two.vercel.app/doctor-dashboard"
+    },
+    {
+      "source": "/doctor-appointments",
+      "destination": "https://prescripto-admin-theta-two.vercel.app/doctor-appointments"
+    },
+    {
+      "source": "/doctor-profile",
+      "destination": "https://prescripto-admin-theta-two.vercel.app/doctor-profile"
+    },
+    {
       "source": "/(.*)",
       "destination": "/"
     }
