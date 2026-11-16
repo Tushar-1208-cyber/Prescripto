@@ -5,8 +5,9 @@ export const AppContext = createContext()
 
 const AppContextProvider = (props) => {
 
-    const currency = import.meta.env.VITE_CURRENCY
-    const backendUrl = import.meta.env.VITE_BACKEND_URL
+    const currency = import.meta.env.VITE_CURRENCY || '₹'
+    const rawBackendUrl = import.meta.env.VITE_BACKEND_URL
+    const backendUrl = ((rawBackendUrl && !rawBackendUrl.includes('ylkw')) ? rawBackendUrl : 'https://prescripto-backend-y1kv.onrender.com').replace(/\/+$/, '')
 
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
