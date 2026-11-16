@@ -27,14 +27,24 @@ const App = () => {
       <div className='flex items-start'>
         <Sidebar />
         <Routes>
-          <Route path='/' element={<></>} />
+          <Route path='/' element={aToken ? <Dashboard /> : <DoctorDashboard />} />
+          <Route path='/admin' element={<Dashboard />} />
           <Route path='/admin-dashboard' element={<Dashboard />} />
           <Route path='/all-appointments' element={<AllAppointments />} />
+          <Route path='/admin/all-appointments' element={<AllAppointments />} />
           <Route path='/add-doctor' element={<AddDoctor />} />
+          <Route path='/admin/add-doctor' element={<AddDoctor />} />
           <Route path='/doctor-list' element={<DoctorsList />} />
+          <Route path='/admin/doctor-list' element={<DoctorsList />} />
+          <Route path='/doctor' element={<DoctorDashboard />} />
           <Route path='/doctor-dashboard' element={<DoctorDashboard />} />
           <Route path='/doctor-appointments' element={<DoctorAppointments />} />
+          <Route path='/doctor/doctor-appointments' element={<DoctorAppointments />} />
+          <Route path='/doctor/appointments' element={<DoctorAppointments />} />
           <Route path='/doctor-profile' element={<DoctorProfile />} />
+          <Route path='/doctor/doctor-profile' element={<DoctorProfile />} />
+          <Route path='/doctor/profile' element={<DoctorProfile />} />
+          <Route path='*' element={aToken ? <Dashboard /> : <DoctorDashboard />} />
         </Routes>
       </div>
     </div>
