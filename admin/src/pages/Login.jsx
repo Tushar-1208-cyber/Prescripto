@@ -11,7 +11,8 @@ const Login = () => {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
 
-  const backendUrl = import.meta.env.VITE_BACKEND_URL
+  const rawBackendUrl = import.meta.env.VITE_BACKEND_URL
+  const backendUrl = ((rawBackendUrl && !rawBackendUrl.includes('ylkw')) ? rawBackendUrl : 'https://prescripto-backend-y1kv.onrender.com').replace(/\/+$/, '')
 
   const { setDToken } = useContext(DoctorContext)
   const { setAToken } = useContext(AdminContext)
