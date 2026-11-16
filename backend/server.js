@@ -24,16 +24,32 @@ const app = express()
 const port = process.env.PORT || 4000
 const httpServer = http.createServer(app)
 
-// CORS configuration supporting development and configurable production origins
+// CORS configuration supporting development, production domains, and configurable origins
+const defaultAllowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:3000',
+    'https://prescripto-frontend-kappa-coral.vercel.app',
+    'https://prescripto-admin.vercel.app'
+]
+
 const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
-    : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000']
+    ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()).filter(Boolean)
+    : defaultAllowedOrigins
+
+const isOriginAllowed = (origin) => {
+    if (!origin) return true
+    if (process.env.NODE_ENV !== 'production') return true
+    if (allowedOrigins.includes(origin) || defaultAllowedOrigins.includes(origin)) return true
+    if (/^https:\/\/([a-z0-9-]+)\.vercel\.app$/i.test(origin)) return true
+    return false
+}
 
 // Real-time Socket.io server with CORS restricted to configured allowed origins
 const io = new SocketIOServer(httpServer, {
     cors: {
         origin: (origin, callback) => {
-            if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+            if (isOriginAllowed(origin)) {
                 return callback(null, true)
             }
             return callback(new Error('Blocked by CORS policy'))
@@ -465,7 +481,7 @@ app.use(helmet())
 app.use(cors({
     origin: (origin, callback) => {
         // allow requests with no origin (like mobile apps, postman, server-to-server) or during development
-        if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+        if (isOriginAllowed(origin)) {
             return callback(null, true)
         }
         return callback(new Error('Blocked by CORS policy'))
